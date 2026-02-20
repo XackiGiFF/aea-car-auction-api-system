@@ -12,6 +12,7 @@ class CalcAvtoScheduler {
 
 	    this.isRunning = false;
 	    this.lastRunTime = null;
+        this.inFlightCars = new Map();
 
 
         // tokens: prefer env, fallback to examples (not secrets)
@@ -287,6 +288,48 @@ class CalcAvtoScheduler {
         } catch (err) {
             this.error(table, '[CALC_AVTO] Error in processTable:', err.message);
 	}
+    }
+
+    async recalculateCarById(carId, table = 'main') {
+        const normalizedTable = this.tables.includes(table) ? table : 'main';
+        const key = `${normalizedTable}:${carId}`;
+
+        if (this.inFlightCars.has(key)) {
+            return this.inFlightCars.get(key);
+        }
+
+        const task = (async () => {
+            const market = this.getMarketFromTable(normalizedTable);
+            const car = await CarModel.getCarById(carId, normalizedTable);
+
+            if (!car) {
+                return {
+                    success: false,
+                    reason: 'not_found',
+                    table: normalizedTable,
+                    carId
+                };
+            }
+
+            const ok = await this.processSingleCar(car, market, normalizedTable);
+            const updated = await CarModel.getCarById(carId, normalizedTable);
+
+            return {
+                success: ok,
+                reason: ok ? 'recalculated' : 'calculation_failed',
+                table: normalizedTable,
+                carId,
+                calc_rub: updated ? updated.CALC_RUB : null,
+                calc_updated_at: updated ? updated.CALC_UPDATED_AT : null
+            };
+        })();
+
+        this.inFlightCars.set(key, task);
+        try {
+            return await task;
+        } finally {
+            this.inFlightCars.delete(key);
+        }
     }
 
     getMarketFromTable(table) {

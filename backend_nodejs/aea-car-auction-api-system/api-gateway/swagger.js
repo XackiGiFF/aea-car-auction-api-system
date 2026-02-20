@@ -1,5 +1,6 @@
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
+require('dotenv').config();
 
 const options = {
     definition: {
@@ -15,8 +16,8 @@ const options = {
         },
         servers: [
             {
-                url: 'https://asiaexpressauto.ru',
-                description: 'Server'
+                url: process.env.SWAGGER_SERVER_URL || 'http://localhost:3000',
+                description: 'Local dev server'
             }
         ],
         components: {

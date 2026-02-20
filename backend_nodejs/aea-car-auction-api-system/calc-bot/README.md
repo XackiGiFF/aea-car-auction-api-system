@@ -6,6 +6,7 @@
 
 - Периодические вычисления
 - Запись результатов в `api_mariadb`
+- On-demand пересчет одной машины через внутренний endpoint `POST /internal/recalculate`
 
 ## Запуск
 
@@ -16,6 +17,9 @@
 
 - `.env` файл
 - шаблон: `.env.example`
+- Для внутреннего API:
+  - `PORT`
+  - `CALC_BOT_INTERNAL_TOKEN`
 
 ## Смежные документы
 

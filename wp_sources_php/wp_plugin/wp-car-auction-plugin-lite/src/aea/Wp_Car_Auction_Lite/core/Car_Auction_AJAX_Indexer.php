@@ -37,6 +37,9 @@ class Car_Auction_AJAX_Indexer {
         add_action('wp_ajax_car_auction_index_and_redirect', array($this, 'ajax_index_and_redirect'));
         add_action('wp_ajax_nopriv_car_auction_index_and_redirect', array($this, 'ajax_index_and_redirect'));
         add_action('wp_ajax_load_similar_cars_ajax', array($this, 'load_similar_cars_ajax_handler'));
+        add_action('wp_ajax_nopriv_load_similar_cars_ajax', array($this, 'load_similar_cars_ajax_handler'));
+        add_action('wp_ajax_load_car_price_ajax', array($this, 'load_car_price_ajax_handler'));
+        add_action('wp_ajax_nopriv_load_car_price_ajax', array($this, 'load_car_price_ajax_handler'));
         
     }
     
@@ -69,6 +72,34 @@ class Car_Auction_AJAX_Indexer {
         }
     
         wp_send_json_success(['html' => $html]);
+    }
+
+    public function load_car_price_ajax_handler(): void
+    {
+        check_ajax_referer('car_auction_price_ajax', 'nonce');
+
+        $car_id = sanitize_text_field($_POST['car_id'] ?? '');
+        $market = sanitize_text_field($_POST['market'] ?? 'main');
+
+        if (empty($car_id)) {
+            wp_send_json_error(['message' => 'Нет ID автомобиля']);
+        }
+
+        $car = $this->api->get_car_details($car_id, $market);
+        if (empty($car) || empty($car['success'])) {
+            wp_send_json_error(['message' => 'Не удалось получить данные автомобиля']);
+        }
+
+        $calc_rub = $car['calc_rub'] ?? null;
+        $has_price = is_numeric($calc_rub) && floatval($calc_rub) > 0;
+
+        wp_send_json_success([
+            'car_id' => $car_id,
+            'market' => $market,
+            'has_price' => $has_price,
+            'calc_rub' => $has_price ? floatval($calc_rub) : null,
+            'formatted_price' => $has_price ? number_format((float)$calc_rub, 0, '.', ' ') . ' ₽' : 'по запросу',
+        ]);
     }
         
     /**

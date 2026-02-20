@@ -128,10 +128,15 @@
 
 
 const express = require('express');
+const axios = require('axios');
 const CarModel = require('../models/CarModel');
 require('dotenv').config();
 
 const router = express.Router();
+const CALC_BOT_URL = process.env.CALC_BOT_URL || 'http://calc-bot:3001';
+const CALC_BOT_INTERNAL_TOKEN = process.env.CALC_BOT_INTERNAL_TOKEN || '';
+const ON_DEMAND_CALC_ENABLED = process.env.ON_DEMAND_CALC_ENABLED !== 'false';
+const ON_DEMAND_CALC_TIMEOUT_MS = parseInt(process.env.ON_DEMAND_CALC_TIMEOUT_MS || '12000', 10);
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
@@ -147,6 +152,49 @@ const validateBarrierCode = (req, res, next) => {
     }
 
     next();
+};
+
+const runOnDemandRecalculation = async (carId, table) => {
+    if (!ON_DEMAND_CALC_ENABLED) {
+        return { success: false, skipped: true, reason: 'disabled' };
+    }
+
+    if (!CALC_BOT_INTERNAL_TOKEN) {
+        return { success: false, skipped: true, reason: 'missing_internal_token' };
+    }
+
+    try {
+        const response = await axios.post(
+            `${CALC_BOT_URL}/internal/recalculate`,
+            { id: carId, table },
+            {
+                timeout: ON_DEMAND_CALC_TIMEOUT_MS,
+                validateStatus: () => true,
+                headers: {
+                    'x-internal-token': CALC_BOT_INTERNAL_TOKEN,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        if (response.status >= 400) {
+            return {
+                success: false,
+                error: response.data?.error || response.data?.data?.reason || `status_${response.status}`,
+                data: response.data?.data || null
+            };
+        }
+
+        return {
+            success: !!response.data?.success,
+            data: response.data?.data || null
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: error.response?.data?.error || error.message
+        };
+    }
 };
 
 // ==================== РОУТЫ ====================
@@ -222,12 +270,14 @@ router.get('/cars', validateBarrierCode, async (req, res) => {
             table = 'main',
             provider = 'ajes',
             client_ip,
+            ip,
             limit = 20,
             offset = 0,
             ...filters
         } = req.query;
+        const clientIP = client_ip || ip;
 
-        if (provider === 'ajes' && !client_ip) {
+        if (provider === 'ajes' && !clientIP) {
             return res.status(400).json({ error: 'Client IP required for AJES' });
         }
 
@@ -239,12 +289,12 @@ router.get('/cars', validateBarrierCode, async (req, res) => {
 
         // Запускаем параллельно подсчет и получение данных
         const [totalCount, cars] = await Promise.all([
-            CarModel.getTotalCount(queryFilters, table, provider, client_ip),
-            CarModel.getCarsByFilter(queryFilters, table, provider, client_ip)
+            CarModel.getTotalCount(queryFilters, table, provider, clientIP),
+            CarModel.getCarsByFilter(queryFilters, table, provider, clientIP)
         ]);
 
         // Получаем фильтры для UI (можно вынести в отдельный запрос для скорости)
-        const availableFilters = await CarModel.getDynamicFilters(queryFilters, table, provider, client_ip);
+        const availableFilters = await CarModel.getDynamicFilters(queryFilters, table, provider, clientIP);
 
         // Рассчитываем мин/макс цену из полученных авто (так как SQL агрегация по цене сложна в API)
         let minPrice = 0, maxPrice = 0;
@@ -321,19 +371,31 @@ router.get('/cars', validateBarrierCode, async (req, res) => {
 router.get('/car/:id', validateBarrierCode, async (req, res) => {
     try {
         const { id } = req.params;
-        const { table = 'main', provider = 'ajes', client_ip } = req.query;
+        const { table = 'main', provider = 'ajes', client_ip, ip, recalc = 'true' } = req.query;
+        const clientIP = client_ip || ip;
 
-        if (provider === 'ajes' && !client_ip) {
+        if (provider === 'ajes' && !clientIP) {
             return res.status(400).json({ error: 'Client IP required' });
         }
 
-        const car = await CarModel.getCarById(id, table, provider, client_ip);
+        const car = await CarModel.getCarById(id, table, provider, clientIP);
 
         if (!car) {
             return res.status(404).json({ error: 'Car not found' });
         }
 
-        res.json({ success: true, data: car });
+        let recalculation = { success: false, skipped: true, reason: 'not_requested' };
+        const shouldRecalculate = String(recalc).toLowerCase() !== 'false';
+
+        if (shouldRecalculate) {
+            recalculation = await runOnDemandRecalculation(id, table);
+            const priceData = await CarModel.getCarPriceById(id, table, provider);
+            if (priceData?.calc_rub) {
+                car.CALC_RUB = priceData.calc_rub;
+            }
+        }
+
+        res.json({ success: true, data: car, recalculation });
 
     } catch (error) {
         console.error('API Error /car/:id:', error.message);
@@ -441,14 +503,16 @@ router.get('/filters/dynamic', validateBarrierCode, async (req, res) => {
             table = 'main',
             provider = 'ajes',
             client_ip,
+            ip,
             ...filters
         } = req.query;
+        const clientIP = client_ip || ip;
 
-        if (provider === 'ajes' && !client_ip) {
+        if (provider === 'ajes' && !clientIP) {
             return res.status(400).json({ error: 'Client IP required' });
         }
 
-        const data = await CarModel.getDynamicFilters(filters, table, provider, client_ip);
+        const data = await CarModel.getDynamicFilters(filters, table, provider, clientIP);
 
         res.json({ success: true, data });
 
@@ -540,8 +604,8 @@ router.get('/filters', validateBarrierCode, async (req, res) => {
  *     summary: Получить доступные провайдеры
  *     description: Возвращает список доступных источников данных
  *     tags: [System]
- *    security:
- *      - ApiKeyAuth: []
+ *     security:
+ *       - ApiKeyAuth: []
  */
 router.get('/providers', validateBarrierCode, (req, res) => {
     try {

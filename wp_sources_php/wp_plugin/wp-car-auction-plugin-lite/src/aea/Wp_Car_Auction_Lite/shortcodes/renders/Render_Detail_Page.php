@@ -284,10 +284,8 @@ class Render_Detail_Page {
                                 </div>
                                 <div class="price-car-wrapper">
                                     <div class="one-char-left m-16-400 gray">Стоимость</div>
-                                    <div class="one-char-right  m-16-400">
-                                        <?php // <div class="m-32-600"> ?>
-                                        <?php //echo (is_numeric($car['calc_rub'])) ? number_format($car['calc_rub'], 0, '.', ' ') . ' ₽' : '—'; ?>
-                                        по запросу
+                                    <div class="one-char-right m-16-400">
+                                        <span id="car-price-value" class="car-price-loading">Расчет стоимости...</span>
                                     </div>
                                 </div>
                                 <div class="price-desc-text">Стоимость является ориентировочной. Точную стоимость конкретного автомобиля уточняйте у наших менеджеров.</div>
@@ -442,9 +440,36 @@ class Render_Detail_Page {
         <script>
             jQuery(document).ready(function($) {
                 var $placeholder = $('#similar-cars-placeholder');
+                var $priceValue = $('#car-price-value');
+                var ajaxUrl = '<?php echo admin_url('admin-ajax.php'); ?>';
+
+                if ($priceValue.length) {
+                    $.ajax({
+                        url: ajaxUrl,
+                        type: 'POST',
+                        timeout: 20000,
+                        data: {
+                            action: 'load_car_price_ajax',
+                            car_id: '<?php echo esc_js($car['id']); ?>',
+                            market: '<?php echo esc_js($car['market']); ?>',
+                            nonce: '<?php echo wp_create_nonce('car_auction_price_ajax'); ?>'
+                        },
+                        success: function(response) {
+                            if (response && response.success && response.data && response.data.formatted_price) {
+                                $priceValue.text(response.data.formatted_price).removeClass('car-price-loading');
+                            } else {
+                                $priceValue.text('по запросу').removeClass('car-price-loading');
+                            }
+                        },
+                        error: function() {
+                            $priceValue.text('по запросу').removeClass('car-price-loading');
+                        }
+                    });
+                }
+
                 if ($placeholder.length) {
                     $.ajax({
-                        url: '<?php echo admin_url('admin-ajax.php'); ?>',
+                        url: ajaxUrl,
                         type: 'POST',
                         timeout: 10000,
                         data: {
@@ -495,6 +520,10 @@ class Render_Detail_Page {
             @keyframes spin {
                 0% { transform: rotate(0deg); }
                 100% { transform: rotate(360deg); }
+            }
+
+            .car-price-loading {
+                opacity: 0.85;
             }
             </style>
         <!-- End Car Auction Preload Detail Content -->

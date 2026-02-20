@@ -7,6 +7,7 @@
 - Принимает запросы от frontend/WordPress
 - Работает с БД `api_mariadb`
 - Отдает данные по машинам и связанным сущностям
+- Триггерит on-demand пересчет цены через `calc-bot` при запросе карточки авто
 
 ## Запуск
 
@@ -17,6 +18,11 @@
 
 - `.env` (локально/на сервере)
 - шаблон: `.env.example`
+- Важные переменные для on-demand расчета:
+  - `ON_DEMAND_CALC_ENABLED`
+  - `ON_DEMAND_CALC_TIMEOUT_MS`
+  - `CALC_BOT_URL`
+  - `CALC_BOT_INTERNAL_TOKEN`
 
 ## Смежные документы
 
