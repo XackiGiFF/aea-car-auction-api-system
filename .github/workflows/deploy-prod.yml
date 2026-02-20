@@ -124,6 +124,6 @@ jobs:
               -f "$COMPOSE_DIR/compose.base.yml" \
               -f "$COMPOSE_DIR/compose.aea.prod.yml" \
               --env-file "$COMPOSE_DIR/.env" \
-              up -d --remove-orphans
+              up -d
 
             docker logout ghcr.io
