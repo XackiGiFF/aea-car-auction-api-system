@@ -2,7 +2,7 @@ name: WP Plugin Release
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "prod"]
     paths:
       - "wp_sources_php/wp_plugin/wp-car-auction-plugin-lite/**"
       - "scripts/bump_wp_plugin_version.sh"
