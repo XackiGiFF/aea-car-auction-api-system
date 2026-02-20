@@ -113,8 +113,19 @@ class Car_Auction_AJAX_Indexer {
 
         $market = sanitize_text_field($_POST['market'] ?? 'main');
         $ids = $_POST['ids'] ?? [];
+
+        // Поддерживаем все варианты:
+        // - ids[]=a&ids[]=b
+        // - ids=a&ids=b (php обычно оставляет последнее значение строкой)
+        // - ids="a,b,c" (fallback)
         if (!is_array($ids)) {
-            wp_send_json_error(['message' => 'Неверный формат IDs']);
+            if (is_string($ids) && strpos($ids, ',') !== false) {
+                $ids = explode(',', $ids);
+            } elseif (is_string($ids) && $ids !== '') {
+                $ids = [$ids];
+            } else {
+                wp_send_json_error(['message' => 'Неверный формат IDs']);
+            }
         }
 
         $ids = array_values(array_unique(array_filter(array_map('sanitize_text_field', $ids))));

@@ -3852,12 +3852,11 @@ class CarSearchUnified extends CarAuctionCore {
             type: 'POST',
             timeout: 30000,
             dataType: 'json',
-            traditional: true,
             data: {
                 action: 'load_cars_prices_ajax',
                 nonce: this.nonce,
                 market: this.currentMarket,
-                ids: uniqueIds
+                'ids[]': uniqueIds
             },
             success: (response) => {
                 const prices = response?.data?.prices || {};
