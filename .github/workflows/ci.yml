@@ -6,7 +6,7 @@ on:
       - ".github/workflows/ci.yml"
       - "backend_nodejs/aea-car-auction-api-system/**"
   push:
-    branches: ["main"]
+    branches: ["main", "dev", "prod"]
     paths:
       - ".github/workflows/ci.yml"
       - "backend_nodejs/aea-car-auction-api-system/**"
