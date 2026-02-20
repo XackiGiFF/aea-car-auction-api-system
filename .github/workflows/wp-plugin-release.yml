@@ -83,5 +83,5 @@ jobs:
         with:
           tag_name: wp-plugin-v${{ steps.version.outputs.version }}
           target_commitish: main
-          generate_release_notes: true
+          body_path: wp_sources_php/wp_plugin/wp-car-auction-plugin-lite/RELEASE_NOTES.md
           files: dist/wp-car-auction-plugin-lite-v${{ steps.version.outputs.version }}.zip
