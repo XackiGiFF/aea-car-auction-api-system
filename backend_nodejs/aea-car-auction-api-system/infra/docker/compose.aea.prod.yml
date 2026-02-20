@@ -1,7 +1,7 @@
 services:
-  api_mariadb:
+  api_mariadb_v2:
     image: mariadb:11.4
-    container_name: ${COMPOSE_PROJECT_NAME:-simpleweb}-api-mariadb
+    container_name: ${COMPOSE_PROJECT_NAME:-aea_api_system}-api-mariadb-v2
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
@@ -16,42 +16,47 @@ services:
       timeout: 10s
       retries: 5
     networks:
-      - aea_network
+      aea_network:
+        aliases:
+          - api-mariadb-v2
 
-  api-gateway:
+  api-gateway-v2:
     image: ghcr.io/${GITHUB_ORG}/api-gateway:${API_GATEWAY_TAG:-latest}
-    container_name: ${COMPOSE_PROJECT_NAME:-simpleweb}-api-gateway
+    container_name: ${COMPOSE_PROJECT_NAME:-aea_api_system}-api-gateway-v2
     restart: unless-stopped
     depends_on:
-      api_mariadb:
+      api_mariadb_v2:
         condition: service_healthy
     env_file:
       - ../../api-gateway/.env
     environment:
-      DB_HOST: api_mariadb
+      DB_HOST: api_mariadb_v2
       DB_PORT: 3306
       NODE_ENV: production
-    ports:
-      - "${API_GATEWAY_PORT:-3000}:3000"
+      CALC_BOT_URL: http://calc-bot-v2:3001
+    expose:
+      - "3000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
     networks:
-      - aea_network
+      aea_network:
+        aliases:
+          - api-gateway-v2
 
-  calc-bot:
+  calc-bot-v2:
     image: ghcr.io/${GITHUB_ORG}/calc-bot:${CALC_BOT_TAG:-latest}
-    container_name: ${COMPOSE_PROJECT_NAME:-simpleweb}-calc-bot
+    container_name: ${COMPOSE_PROJECT_NAME:-aea_api_system}-calc-bot-v2
     restart: unless-stopped
     depends_on:
-      api_mariadb:
+      api_mariadb_v2:
         condition: service_healthy
     env_file:
       - ../../calc-bot/.env
     environment:
-      DB_HOST: api_mariadb
+      DB_HOST: api_mariadb_v2
       DB_PORT: 3306
       NODE_ENV: production
     healthcheck:
@@ -60,19 +65,21 @@ services:
       timeout: 10s
       retries: 3
     networks:
-      - aea_network
+      aea_network:
+        aliases:
+          - calc-bot-v2
 
-  che-parser-bot:
+  che-parser-bot-v2:
     image: ghcr.io/${GITHUB_ORG}/che-parser-bot:${CHE_PARSER_BOT_TAG:-latest}
-    container_name: ${COMPOSE_PROJECT_NAME:-simpleweb}-che-parser-bot
+    container_name: ${COMPOSE_PROJECT_NAME:-aea_api_system}-che-parser-bot-v2
     restart: unless-stopped
     depends_on:
-      api_mariadb:
+      api_mariadb_v2:
         condition: service_healthy
     env_file:
       - ../../che-parser-bot/.env
     environment:
-      DB_HOST: api_mariadb
+      DB_HOST: api_mariadb_v2
       DB_PORT: 3306
       NODE_ENV: production
     healthcheck:
@@ -81,7 +88,9 @@ services:
       timeout: 10s
       retries: 3
     networks:
-      - aea_network
+      aea_network:
+        aliases:
+          - che-parser-bot-v2
 
   # sync-bot:
   #   image: ghcr.io/${GITHUB_ORG}/sync-bot:${SYNC_BOT_TAG:-latest}

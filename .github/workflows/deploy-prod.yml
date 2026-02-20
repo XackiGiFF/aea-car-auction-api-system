@@ -3,13 +3,6 @@ name: Deploy Prod
 on:
   push:
     branches: ["prod"]
-    paths:
-      - ".github/workflows/deploy-prod.yml"
-      - "backend_nodejs/aea-car-auction-api-system/api-gateway/**"
-      - "backend_nodejs/aea-car-auction-api-system/calc-bot/**"
-      - "backend_nodejs/aea-car-auction-api-system/che-parser-bot/**"
-      - "backend_nodejs/aea-car-auction-api-system/infra/docker/compose.base.yml"
-      - "backend_nodejs/aea-car-auction-api-system/infra/docker/compose.aea.prod.yml"
   workflow_dispatch:
 
 permissions:
