@@ -40,6 +40,7 @@ class CarSearchUnified extends CarAuctionCore {
         this.isLoadingDynamicFilters = false;
         // Таймер для группировки изменений фильтров
         this.filterChangeTimeout = null;
+        this.priceRefreshInProgress = false;
 
         console.log('CarSearchUnified: New instance created');
         
@@ -3738,6 +3739,7 @@ class CarSearchUnified extends CarAuctionCore {
     // Обработка карточек автомобилей - упрощение 4WD значений
     processCarCards() {
         this.process4WDInCards();
+        this.refreshPendingCardPrices($(document));
     }
 
     // Обработка значений заканчивающихся на 4WD - показываем просто 4WD
@@ -3812,7 +3814,83 @@ class CarSearchUnified extends CarAuctionCore {
         // Вызываем обработку 4WD для новых карточек
         setTimeout(() => {
             this.process4WDInCards();
+            this.refreshPendingCardPrices($('.posts-list .car-auction-results-content:visible, .car-auction-auto-results:visible'));
         }, 100);
+    }
+
+    refreshPendingCardPrices($scope) {
+        if (this.priceRefreshInProgress) {
+            return;
+        }
+
+        const $root = ($scope && $scope.length) ? $scope : $(document);
+        const $pendingCards = $root.find('.js-async-price[data-price-state="pending"]');
+        if ($pendingCards.length === 0) {
+            return;
+        }
+
+        const ids = [];
+        $pendingCards.each(function() {
+            const $card = $(this);
+            const id = $card.data('car-id');
+            if (!id) {
+                return;
+            }
+            ids.push(String(id));
+            $card.attr('data-price-state', 'loading');
+        });
+
+        const uniqueIds = [...new Set(ids)];
+        if (uniqueIds.length === 0) {
+            return;
+        }
+
+        this.priceRefreshInProgress = true;
+
+        $.ajax({
+            url: this.ajaxUrl,
+            type: 'POST',
+            timeout: 30000,
+            dataType: 'json',
+            traditional: true,
+            data: {
+                action: 'load_cars_prices_ajax',
+                nonce: this.nonce,
+                market: this.currentMarket,
+                ids: uniqueIds
+            },
+            success: (response) => {
+                const prices = response?.data?.prices || {};
+
+                uniqueIds.forEach((id) => {
+                    const $cards = $('.js-async-price[data-car-id="' + id + '"]');
+                    if ($cards.length === 0) {
+                        return;
+                    }
+
+                    const item = prices[id];
+                    if (item && item.has_price && item.formatted_value) {
+                        $cards.each(function() {
+                            const $card = $(this);
+                            $card.find('.js-price-value').text(item.formatted_value);
+                            const rubIcon = $card.data('rub-icon');
+                            if (rubIcon) {
+                                $card.find('.js-price-currency').attr('src', rubIcon);
+                            }
+                            $card.attr('data-price-state', 'ready');
+                        });
+                    } else {
+                        $cards.attr('data-price-state', 'no_price');
+                    }
+                });
+            },
+            error: () => {
+                $('.js-async-price[data-price-state="loading"]').attr('data-price-state', 'pending');
+            },
+            complete: () => {
+                this.priceRefreshInProgress = false;
+            }
+        });
     }
 
     // ===== ОТЛАДОЧНЫЕ ФУНКЦИИ =====

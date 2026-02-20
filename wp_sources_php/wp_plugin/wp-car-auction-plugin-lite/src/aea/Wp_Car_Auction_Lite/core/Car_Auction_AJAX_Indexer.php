@@ -40,6 +40,8 @@ class Car_Auction_AJAX_Indexer {
         add_action('wp_ajax_nopriv_load_similar_cars_ajax', array($this, 'load_similar_cars_ajax_handler'));
         add_action('wp_ajax_load_car_price_ajax', array($this, 'load_car_price_ajax_handler'));
         add_action('wp_ajax_nopriv_load_car_price_ajax', array($this, 'load_car_price_ajax_handler'));
+        add_action('wp_ajax_load_cars_prices_ajax', array($this, 'load_cars_prices_ajax_handler'));
+        add_action('wp_ajax_nopriv_load_cars_prices_ajax', array($this, 'load_cars_prices_ajax_handler'));
         
     }
     
@@ -99,6 +101,43 @@ class Car_Auction_AJAX_Indexer {
             'has_price' => $has_price,
             'calc_rub' => $has_price ? floatval($calc_rub) : null,
             'formatted_price' => $has_price ? number_format((float)$calc_rub, 0, '.', ' ') . ' ₽' : 'по запросу',
+        ]);
+    }
+
+    public function load_cars_prices_ajax_handler(): void
+    {
+        $nonce = sanitize_text_field($_POST['nonce'] ?? '');
+        if (!wp_verify_nonce($nonce, 'car_auction_nonce') && !wp_verify_nonce($nonce, 'car_auction_price_ajax')) {
+            wp_send_json_error(['message' => 'Недействительный nonce']);
+        }
+
+        $market = sanitize_text_field($_POST['market'] ?? 'main');
+        $ids = $_POST['ids'] ?? [];
+        if (!is_array($ids)) {
+            wp_send_json_error(['message' => 'Неверный формат IDs']);
+        }
+
+        $ids = array_values(array_unique(array_filter(array_map('sanitize_text_field', $ids))));
+        if (empty($ids)) {
+            wp_send_json_success(['prices' => []]);
+        }
+
+        // Ограничение на размер batch, чтобы не перегружать внешний API.
+        $ids = array_slice($ids, 0, 20);
+        $prices = [];
+
+        foreach ($ids as $id) {
+            $price = $this->api->get_car_price($id, $market, true);
+            $prices[$id] = [
+                'has_price' => !empty($price['has_price']),
+                'calc_rub' => $price['calc_rub'] ?? null,
+                'formatted_value' => $price['formatted_value'] ?? null
+            ];
+        }
+
+        wp_send_json_success([
+            'market' => $market,
+            'prices' => $prices
         ]);
     }
         

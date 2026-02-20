@@ -438,15 +438,22 @@ router.get('/car/:id', validateBarrierCode, async (req, res) => {
 router.get('/car/:id/price', validateBarrierCode, async (req, res) => {
     try {
         const { id } = req.params;
-        const { table = 'main', provider = 'ajes' } = req.query;
+        const { table = 'main', provider = 'ajes', recalc = 'true' } = req.query;
+
+        let recalculation = { success: false, skipped: true, reason: 'not_requested' };
+        const shouldRecalculate = String(recalc).toLowerCase() !== 'false';
+
+        if (shouldRecalculate) {
+            recalculation = await runOnDemandRecalculation(id, table);
+        }
 
         const priceData = await CarModel.getCarPriceById(id, table, provider);
 
         if (!priceData) {
-            return res.status(404).json({ error: 'Price not found' });
+            return res.status(404).json({ error: 'Price not found', recalculation });
         }
 
-        res.json({ success: true, data: priceData });
+        res.json({ success: true, data: priceData, recalculation });
 
     } catch (error) {
         res.status(500).json({ error: error.message });

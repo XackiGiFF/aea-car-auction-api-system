@@ -135,7 +135,8 @@ class Render_Search_Result {
         $main_image = $car['images'][0] ?? '';
 
         // Используем рассчитанную цену из API
-        $final_price = $car['calc_rub'] > 0 ? $car['calc_rub'] : '—';
+        $has_calculated_price = is_numeric($car['calc_rub']) && (float)$car['calc_rub'] > 0;
+        $final_price = $has_calculated_price ? (float)$car['calc_rub'] : '—';
 
 
         ob_start();
@@ -231,11 +232,17 @@ class Render_Search_Result {
                     </div>
                 </div>
 
-                <div class="price-car-s">
+                <div
+                    class="price-car-s js-async-price"
+                    data-car-id="<?php echo esc_attr($car['id']); ?>"
+                    data-market="<?php echo esc_attr($car['market']); ?>"
+                    data-price-state="<?php echo $has_calculated_price ? 'ready' : 'pending'; ?>"
+                    data-rub-icon="<?php echo esc_attr(get_template_directory_uri().'/images/6840196e6a5fa9ce234c237e_ruble.png'); ?>"
+                >
                     <?php
                     
                     $currency_src = get_template_directory_uri().'/images/6840196e6a5fa9ce234c237e_ruble.png';
-                    if($final_price == "—" ){
+                    if (!$has_calculated_price) {
                         switch ($car['currency']) {
                             case 'USD':
                                 $currency_src = CAR_AUCTION_PLUGIN_URL.'assets/images/USD.png';
@@ -253,14 +260,14 @@ class Render_Search_Result {
                     }
                     ?>
                     
-                    <img src="<?=$currency_src?>" loading="lazy" alt="" class="rub-img">
-                    <div class="em-1-5">
-                        <?php if (is_numeric($final_price)): ?>
+                    <img src="<?php echo esc_url($currency_src); ?>" loading="lazy" alt="" class="rub-img js-price-currency">
+                    <div class="em-1-5 js-price-value">
+                        <?php if ($has_calculated_price): ?>
                             <?php echo number_format($final_price, 0, '', ' '); ?>
                         <?php else: ?>
-                            <?php if (is_numeric($car['stock_price'])):?>
+                            <?php if (is_numeric($car['stock_price'])): ?>
                                 <?php echo number_format($car['stock_price'], 0, '', ' ') ?>
-                            <? else: ?>
+                            <?php else: ?>
                                 —
                             <?php endif; ?>
                         <?php endif; ?>

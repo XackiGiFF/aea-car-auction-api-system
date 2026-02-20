@@ -302,6 +302,43 @@ class Car_Auction_API {
     }
 
     /**
+     * Получить расчетную цену автомобиля через отдельный endpoint.
+     * Поддерживает on-demand пересчет на стороне api-gateway.
+     */
+    public function get_car_price($car_id, $table = 'main', $recalc = true): array
+    {
+        $provider = $this->resolve_provider($table);
+        $url = $this->build_api_url('/api/car/' . rawurlencode($car_id) . '/price', [
+            'table' => $table,
+            'provider' => $provider,
+            'recalc' => $recalc ? 'true' : 'false'
+        ]);
+
+        $response = $this->fast_api_request($url, 20);
+        if (empty($response['success']) || empty($response['data'])) {
+            return [
+                'success' => false,
+                'error' => $response['error'] ?? 'Failed to get car price',
+                'calc_rub' => null,
+                'formatted_value' => null,
+                'has_price' => false
+            ];
+        }
+
+        $calc_rub = $response['data']['calc_rub'] ?? null;
+        $numeric = is_numeric($calc_rub) ? (float)$calc_rub : null;
+        $has_price = $numeric !== null && $numeric > 0;
+
+        return [
+            'success' => true,
+            'calc_rub' => $has_price ? $numeric : null,
+            'formatted_value' => $has_price ? number_format($numeric, 0, '.', ' ') : null,
+            'has_price' => $has_price,
+            'recalculation' => $response['recalculation'] ?? null
+        ];
+    }
+
+    /**
      * Получение типов топлива
      */
     public function get_fuel_types($table = 'main', $filters = array()) {
@@ -456,6 +493,11 @@ class Car_Auction_API {
         }
 
         return sanitize_text_field($input);
+    }
+
+    private function resolve_provider($table = 'main'): string
+    {
+        return $table === 'che_available' ? 'che-168' : 'ajes';
     }
 
     /**
