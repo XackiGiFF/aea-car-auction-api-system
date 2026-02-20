@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/ci.yml"
+      - "backend_nodejs/aea-car-auction-api-system/**"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/ci.yml"
+      - "backend_nodejs/aea-car-auction-api-system/**"
+
+jobs:
+  service-checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - api-gateway
+          - calc-bot
+          - che-parser-bot
+
+    defaults:
+      run:
+        working-directory: backend_nodejs/aea-car-auction-api-system/${{ matrix.service }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint (if present)
+        run: npm run lint --if-present
+
+      - name: Test (if present)
+        run: npm run test --if-present
+
+      - name: Build (if present)
+        run: npm run build --if-present
+
+  docker-build-check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api-gateway
+            context: backend_nodejs/aea-car-auction-api-system/api-gateway
+          - service: calc-bot
+            context: backend_nodejs/aea-car-auction-api-system/calc-bot
+          - service: che-parser-bot
+            context: backend_nodejs/aea-car-auction-api-system/che-parser-bot
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          tags: local/${{ matrix.service }}:ci

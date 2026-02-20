@@ -1,0 +1,38 @@
+name: WP Plugin CI
+
+on:
+  pull_request:
+    paths:
+      - "wp_sources_php/wp_plugin/wp-car-auction-plugin-lite/**"
+      - ".github/workflows/wp-plugin-ci.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "wp_sources_php/wp_plugin/wp-car-auction-plugin-lite/**"
+      - ".github/workflows/wp-plugin-ci.yml"
+
+jobs:
+  package-plugin:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read plugin version
+        id: version
+        run: |
+          VERSION=$(grep -E '^\* Version:' wp_sources_php/wp_plugin/wp-car-auction-plugin-lite/wp-car-auction-plugin-lite.php | sed -E 's/^\* Version:[[:space:]]*//')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build plugin zip
+        run: |
+          mkdir -p dist
+          cd wp_sources_php/wp_plugin
+          zip -r "../../dist/wp-car-auction-plugin-lite-v${{ steps.version.outputs.version }}.zip" wp-car-auction-plugin-lite -x "*/.DS_Store" "*/__MACOSX/*"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp-car-auction-plugin-lite-v${{ steps.version.outputs.version }}
+          path: dist/wp-car-auction-plugin-lite-v${{ steps.version.outputs.version }}.zip

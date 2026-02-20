@@ -1,0 +1,87 @@
+name: WP Plugin Release
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "wp_sources_php/wp_plugin/wp-car-auction-plugin-lite/**"
+      - "scripts/bump_wp_plugin_version.sh"
+      - ".github/workflows/wp-plugin-release.yml"
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Version bump type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  release-plugin:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check plugin changes on push
+        id: changed
+        if: github.event_name == 'push'
+        run: |
+          if git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- wp_sources_php/wp_plugin/wp-car-auction-plugin-lite | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stop when no plugin changes
+        if: github.event_name == 'push' && steps.changed.outputs.changed != 'true'
+        run: |
+          echo "No plugin changes detected. Skip release."
+          exit 0
+
+      - name: Set bump type
+        id: bump
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "type=${{ github.event.inputs.bump_type }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=patch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump plugin version
+        id: version
+        run: |
+          NEW_VERSION=$(./scripts/bump_wp_plugin_version.sh "${{ steps.bump.outputs.type }}")
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build plugin zip
+        run: |
+          mkdir -p dist
+          cd wp_sources_php/wp_plugin
+          zip -r "../../dist/wp-car-auction-plugin-lite-v${{ steps.version.outputs.version }}.zip" wp-car-auction-plugin-lite -x "*/.DS_Store" "*/__MACOSX/*"
+
+      - name: Commit bumped version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add wp_sources_php/wp_plugin/wp-car-auction-plugin-lite/wp-car-auction-plugin-lite.php
+          git commit -m "chore(wp-plugin): bump version to v${{ steps.version.outputs.version }}"
+          git push
+
+      - name: Create GitHub release with zip
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: wp-plugin-v${{ steps.version.outputs.version }}
+          target_commitish: main
+          generate_release_notes: true
+          files: dist/wp-car-auction-plugin-lite-v${{ steps.version.outputs.version }}.zip

@@ -1,0 +1,117 @@
+# Legacy file kept for backward compatibility.
+# Preferred stack: compose.base.yml + compose.aea.prod.yml
+name: aea-car-auction
+
+services:
+  api_mariadb:
+    image: mariadb:11.4
+    container_name: aea-api-mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - api_mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+    networks:
+      - aea_network
+
+  api-gateway:
+    image: ghcr.io/${GITHUB_ORG}/api-gateway:${API_GATEWAY_TAG:-latest}
+    container_name: car-auction-api-gateway
+    restart: unless-stopped
+    depends_on:
+      api_mariadb:
+        condition: service_healthy
+    env_file:
+      - ../../api-gateway/.env
+    environment:
+      DB_HOST: api_mariadb
+      DB_PORT: 3306
+      NODE_ENV: production
+    ports:
+      - "${API_GATEWAY_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aea_network
+
+  calc-bot:
+    image: ghcr.io/${GITHUB_ORG}/calc-bot:${CALC_BOT_TAG:-latest}
+    container_name: car-auction-calc-bot
+    restart: unless-stopped
+    depends_on:
+      api_mariadb:
+        condition: service_healthy
+    env_file:
+      - ../../calc-bot/.env
+    environment:
+      DB_HOST: api_mariadb
+      DB_PORT: 3306
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "node"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aea_network
+
+  che-parser-bot:
+    image: ghcr.io/${GITHUB_ORG}/che-parser-bot:${CHE_PARSER_BOT_TAG:-latest}
+    container_name: car-auction-che-parser
+    restart: unless-stopped
+    depends_on:
+      api_mariadb:
+        condition: service_healthy
+    env_file:
+      - ../../che-parser-bot/.env
+    environment:
+      DB_HOST: api_mariadb
+      DB_PORT: 3306
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "node"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aea_network
+
+  # Optional service. Enable when provider is stable.
+  # sync-bot:
+  #   image: ghcr.io/${GITHUB_ORG}/sync-bot:${SYNC_BOT_TAG:-latest}
+  #   container_name: car-auction-sync-bot
+  #   restart: unless-stopped
+  #   depends_on:
+  #     api_mariadb:
+  #       condition: service_healthy
+  #   env_file:
+  #     - ../../sync-bot/.env
+  #   environment:
+  #     DB_HOST: api_mariadb
+  #     DB_PORT: 3306
+  #     NODE_ENV: production
+  #   healthcheck:
+  #     test: ["CMD", "pgrep", "-f", "node"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #   networks:
+  #     - aea_network
+
+networks:
+  aea_network:
+    name: aea_network
+
+volumes:
+  api_mariadb_data:

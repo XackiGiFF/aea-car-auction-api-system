@@ -1,0 +1,11 @@
+name: ${COMPOSE_PROJECT_NAME:-simpleweb}
+
+networks:
+  aea_network:
+    name: ${AEA_NETWORK_NAME:-aea_network}
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: ${AEA_NETWORK_MTU:-1450}
+
+volumes:
+  api_mariadb_data:
