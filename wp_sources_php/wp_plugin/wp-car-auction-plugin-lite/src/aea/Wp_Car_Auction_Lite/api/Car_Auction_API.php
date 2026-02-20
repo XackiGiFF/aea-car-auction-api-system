@@ -307,34 +307,58 @@ class Car_Auction_API {
      */
     public function get_car_price($car_id, $table = 'main', $recalc = true): array
     {
-        $provider = $this->resolve_provider($table);
-        $url = $this->build_api_url('/api/car/' . rawurlencode($car_id) . '/price', [
-            'table' => $table,
-            'provider' => $provider,
-            'recalc' => $recalc ? 'true' : 'false'
-        ]);
+        $first_result = null;
 
-        $response = $this->fast_api_request($url, 20);
-        if (empty($response['success']) || empty($response['data'])) {
-            return [
-                'success' => false,
-                'error' => $response['error'] ?? 'Failed to get car price',
-                'calc_rub' => null,
-                'formatted_value' => null,
-                'has_price' => false
+        foreach ($this->resolve_price_providers($table) as $provider) {
+            $url = $this->build_api_url('/api/car/' . rawurlencode($car_id) . '/price', [
+                'table' => $table,
+                'provider' => $provider,
+                'recalc' => $recalc ? 'true' : 'false'
+            ]);
+
+            $response = $this->fast_api_request($url, 20);
+            if (empty($response['success']) || empty($response['data'])) {
+                if ($first_result === null) {
+                    $first_result = [
+                        'success' => false,
+                        'error' => $response['error'] ?? 'Failed to get car price',
+                        'calc_rub' => null,
+                        'formatted_value' => null,
+                        'has_price' => false
+                    ];
+                }
+                continue;
+            }
+
+            $calc_rub = $response['data']['calc_rub'] ?? null;
+            $numeric = is_numeric($calc_rub) ? (float)$calc_rub : null;
+            $has_price = $numeric !== null && $numeric > 0;
+
+            $result = [
+                'success' => true,
+                'calc_rub' => $has_price ? $numeric : null,
+                'formatted_value' => $has_price ? number_format($numeric, 0, '.', ' ') : null,
+                'has_price' => $has_price,
+                'recalculation' => $response['recalculation'] ?? null
             ];
+
+            // Если у провайдера есть цена — сразу возвращаем.
+            // Иначе пробуем fallback провайдер.
+            if ($has_price) {
+                return $result;
+            }
+
+            if ($first_result === null) {
+                $first_result = $result;
+            }
         }
 
-        $calc_rub = $response['data']['calc_rub'] ?? null;
-        $numeric = is_numeric($calc_rub) ? (float)$calc_rub : null;
-        $has_price = $numeric !== null && $numeric > 0;
-
-        return [
-            'success' => true,
-            'calc_rub' => $has_price ? $numeric : null,
-            'formatted_value' => $has_price ? number_format($numeric, 0, '.', ' ') : null,
-            'has_price' => $has_price,
-            'recalculation' => $response['recalculation'] ?? null
+        return $first_result ?? [
+            'success' => false,
+            'error' => 'Failed to get car price',
+            'calc_rub' => null,
+            'formatted_value' => null,
+            'has_price' => false
         ];
     }
 
@@ -498,6 +522,20 @@ class Car_Auction_API {
     private function resolve_provider($table = 'main'): string
     {
         return $table === 'che_available' ? 'che-168' : 'ajes';
+    }
+
+    private function resolve_price_providers($table = 'main'): array
+    {
+        // Для Китая держим fallback на оба источника, чтобы не терять calc_rub.
+        if ($table === 'china') {
+            return ['che-168', 'ajes'];
+        }
+
+        if ($table === 'che_available') {
+            return ['che-168'];
+        }
+
+        return ['ajes'];
     }
 
     /**

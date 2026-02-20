@@ -87,20 +87,15 @@ class Car_Auction_AJAX_Indexer {
             wp_send_json_error(['message' => 'Нет ID автомобиля']);
         }
 
-        $car = $this->api->get_car_details($car_id, $market);
-        if (empty($car) || empty($car['success'])) {
-            wp_send_json_error(['message' => 'Не удалось получить данные автомобиля']);
-        }
-
-        $calc_rub = $car['calc_rub'] ?? null;
-        $has_price = is_numeric($calc_rub) && floatval($calc_rub) > 0;
+        $price = $this->api->get_car_price($car_id, $market, true);
+        $has_price = !empty($price['has_price']);
 
         wp_send_json_success([
             'car_id' => $car_id,
             'market' => $market,
             'has_price' => $has_price,
-            'calc_rub' => $has_price ? floatval($calc_rub) : null,
-            'formatted_price' => $has_price ? number_format((float)$calc_rub, 0, '.', ' ') . ' ₽' : 'по запросу',
+            'calc_rub' => $has_price ? ($price['calc_rub'] ?? null) : null,
+            'formatted_price' => $has_price ? (($price['formatted_value'] ?? '') . ' ₽') : 'по запросу',
         ]);
     }
 
@@ -113,6 +108,9 @@ class Car_Auction_AJAX_Indexer {
 
         $market = sanitize_text_field($_POST['market'] ?? 'main');
         $ids = $_POST['ids'] ?? [];
+        if (!is_array($ids)) {
+            $ids = $this->extract_ids_from_request_body();
+        }
 
         // Поддерживаем все варианты:
         // - ids[]=a&ids[]=b
@@ -150,6 +148,26 @@ class Car_Auction_AJAX_Indexer {
             'market' => $market,
             'prices' => $prices
         ]);
+    }
+
+    private function extract_ids_from_request_body(): array
+    {
+        $raw = file_get_contents('php://input');
+        if (!$raw) {
+            return [];
+        }
+
+        $result = [];
+        if (preg_match_all('/(?:^|&)(?:ids|ids%5B%5D)=([^&]+)/i', $raw, $matches)) {
+            foreach ($matches[1] as $encoded) {
+                $decoded = urldecode($encoded);
+                if ($decoded !== '') {
+                    $result[] = $decoded;
+                }
+            }
+        }
+
+        return $result;
     }
         
     /**
