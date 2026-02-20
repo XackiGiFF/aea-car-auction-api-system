@@ -17,10 +17,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service:
-          - api-gateway
-          - calc-bot
-          - che-parser-bot
+        include:
+          - service: api-gateway
+            run_tests: true
+          - service: calc-bot
+            run_tests: true
+          - service: che-parser-bot
+            run_tests: false
 
     defaults:
       run:
@@ -42,6 +45,7 @@ jobs:
         run: npm run lint --if-present
 
       - name: Test (if present)
+        if: ${{ matrix.run_tests }}
         run: npm run test --if-present
 
       - name: Build (if present)

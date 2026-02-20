@@ -9,7 +9,9 @@ if [[ ! -f "$PLUGIN_FILE" ]]; then
   exit 1
 fi
 
-current_version="$(grep -E '^\* Version:' "$PLUGIN_FILE" | sed -E 's/^\* Version:[[:space:]]*//')"
+current_version="$(
+  sed -nE "s/^[[:space:]]*\\*[[:space:]]*Version:[[:space:]]*([0-9]+\\.[0-9]+\\.[0-9]+)[[:space:]]*$/\\1/p" "$PLUGIN_FILE" | head -n1
+)"
 if [[ -z "$current_version" ]]; then
   echo "Failed to read current version from plugin header" >&2
   exit 1
@@ -41,7 +43,7 @@ esac
 
 new_version="${major}.${minor}.${patch}"
 
-sed -i -E "s/^(\* Version: )[0-9]+\.[0-9]+\.[0-9]+$/\1${new_version}/" "$PLUGIN_FILE"
-sed -i -E "s/^(const CAR_AUCTION_VERSION = ')[0-9]+\.[0-9]+\.[0-9]+(';)/\1${new_version}\2/" "$PLUGIN_FILE"
+sed -i -E "s/^([[:space:]]*\\*[[:space:]]*Version:[[:space:]]*)[0-9]+\\.[0-9]+\\.[0-9]+([[:space:]]*)$/\\1${new_version}\\2/" "$PLUGIN_FILE"
+sed -i -E "s/^([[:space:]]*const[[:space:]]+CAR_AUCTION_VERSION[[:space:]]*=[[:space:]]*')[0-9]+\\.[0-9]+\\.[0-9]+(';[[:space:]]*)$/\\1${new_version}\\2/" "$PLUGIN_FILE"
 
 echo "$new_version"

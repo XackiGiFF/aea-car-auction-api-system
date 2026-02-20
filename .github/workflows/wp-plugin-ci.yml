@@ -22,7 +22,11 @@ jobs:
       - name: Read plugin version
         id: version
         run: |
-          VERSION=$(grep -E '^\* Version:' wp_sources_php/wp_plugin/wp-car-auction-plugin-lite/wp-car-auction-plugin-lite.php | sed -E 's/^\* Version:[[:space:]]*//')
+          VERSION=$(sed -nE "s/^[[:space:]]*\\*[[:space:]]*Version:[[:space:]]*([0-9]+\\.[0-9]+\\.[0-9]+)[[:space:]]*$/\\1/p" wp_sources_php/wp_plugin/wp-car-auction-plugin-lite/wp-car-auction-plugin-lite.php | head -n1)
+          if [ -z "$VERSION" ]; then
+            echo "Failed to parse plugin version" >&2
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Build plugin zip
