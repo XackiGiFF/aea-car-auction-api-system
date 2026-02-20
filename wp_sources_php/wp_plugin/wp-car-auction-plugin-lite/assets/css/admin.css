@@ -1,0 +1,259 @@
+/* Car Auction Admin Styles */
+
+.car-auction-admin-header {
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.car-auction-admin-header h2 {
+    margin: 0 0 10px 0;
+    color: #333;
+}
+
+.car-auction-admin-header p {
+    margin: 0;
+    color: #666;
+}
+
+.car-auction-test-connection {
+    margin: 20px 0;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 6px;
+}
+
+.car-auction-test-connection button {
+    margin-right: 15px;
+}
+
+#connection-status {
+    font-weight: bold;
+}
+
+/* Filter status grid for monitoring page */
+.filter-status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    margin: 20px 0;
+}
+
+.status-card {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 20px;
+    background: #fff;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.status-card h3 {
+    margin-top: 0;
+    color: #333;
+    border-bottom: 2px solid #dc3545;
+    padding-bottom: 8px;
+}
+
+.filter-monitor-controls {
+    margin: 20px 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.filter-monitor-controls .button {
+    margin: 0;
+}
+
+.sync-logs {
+    margin-top: 30px;
+}
+
+.sync-logs table {
+    margin-top: 15px;
+}
+
+.sync-status-loading {
+    text-align: center;
+    padding: 40px;
+    color: #666;
+    font-style: italic;
+}
+
+/* Cache stats styling */
+.car-auction-cache-stats {
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.car-auction-cache-stats h3 {
+    margin-top: 0;
+    color: #333;
+    border-bottom: 2px solid #dc3545;
+    padding-bottom: 8px;
+}
+
+.car-auction-cache-stats .form-table {
+    margin-top: 15px;
+}
+
+/* Status badges */
+.status-badge {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.status-success {
+    background: #d4edda;
+    color: #155724;
+}
+
+.status-error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.status-warning {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.status-unknown {
+    background: #e2e3e5;
+    color: #383d41;
+}
+
+/* Log level badges */
+.log-level {
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+.log-info {
+    background: #cce7ff;
+    color: #004085;
+}
+
+.log-error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.log-success {
+    background: #d4edda;
+    color: #155724;
+}
+
+/* Action buttons */
+.tablenav .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.tablenav .actions .button {
+    margin: 0;
+}
+
+/* Car index table improvements */
+.wp-list-table .column-car_id {
+    width: 120px;
+}
+
+.wp-list-table .column-market {
+    width: 80px;
+}
+
+.wp-list-table .column-brand {
+    width: 100px;
+}
+
+.wp-list-table .column-model {
+    width: 120px;
+}
+
+.wp-list-table .column-year {
+    width: 60px;
+}
+
+.wp-list-table .column-views {
+    width: 60px;
+}
+
+.wp-list-table .column-indexed {
+    width: 140px;
+}
+
+.wp-list-table .column-actions {
+    width: 100px;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .filter-status-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .filter-monitor-controls {
+        flex-direction: column;
+    }
+    
+    .filter-monitor-controls .button {
+        width: 100%;
+    }
+    
+    .tablenav .actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .tablenav .actions .button {
+        width: 100%;
+        margin-bottom: 5px;
+    }
+}
+
+/* Loading states */
+.button[disabled] {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Success/error message styling */
+.notice {
+    margin: 15px 0;
+}
+
+/* Settings form improvements */
+.form-table th {
+    width: 200px;
+}
+
+.form-table .description {
+    margin-top: 5px;
+    font-style: italic;
+}
+
+/* Meta box styling for car details */
+.car-auction-meta-box .form-table {
+    margin-top: 0;
+}
+
+.car-auction-meta-box .form-table th {
+    width: 150px;
+}
+
+.car-auction-meta-box .button {
+    margin-top: 10px;
+}

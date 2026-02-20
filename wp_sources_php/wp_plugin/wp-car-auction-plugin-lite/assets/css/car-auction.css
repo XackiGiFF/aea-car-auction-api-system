@@ -1,0 +1,847 @@
+/* Car Auction Frontend Styles */
+
+/* CSS Variables Fallback */
+:root {
+    --e22236: #e22236;
+    --white: white;
+    --333: #333;
+    --ccc: #ccc;
+}
+
+.car-auction-search-form {
+    background: #fff;
+    border-radius: 12px;
+    padding: 30px;
+    margin-bottom: 30px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+}
+
+.car-auction-form-header {
+    margin-bottom: 25px;
+    border-bottom: 2px solid #dc3545;
+    padding-bottom: 15px;
+}
+
+.car-auction-form-header h2 {
+    margin: 0;
+    color: #333;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.car-auction-filters {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.filter-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.filter-group label {
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 8px;
+    font-size: 14px;
+}
+
+.filter-group input,
+.filter-group select {
+    padding: 12px 15px;
+    border: 2px solid #e1e5e9;
+    border-radius: 8px;
+    font-size: 14px;
+    transition: border-color 0.3s ease;
+}
+
+.filter-group input:focus,
+.filter-group select:focus {
+    outline: none;
+    border-color: #dc3545;
+}
+
+.filter-group select:disabled {
+    background-color: #f8f9fa;
+    color: #6c757d;
+    cursor: not-allowed;
+}
+
+.filter-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 15px;
+    margin-top: 10px;
+}
+
+.car-auction-search-btn,
+.car-auction-reset-btn {
+    padding: 12px 30px;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.car-auction-search-btn {
+    background: #dc3545;
+    color: white;
+}
+
+.car-auction-search-btn:hover {
+    background: #c82333;
+}
+
+.car-auction-reset-btn {
+    background: #6c757d;
+    color: white;
+}
+
+.car-auction-reset-btn:hover {
+    background: #5a6268;
+}
+
+.view-toggle {
+    display: flex;
+    gap: 5px;
+}
+
+.view-toggle-btn {
+    padding: 8px 16px;
+    border: 2px solid #dc3545;
+    background: white;
+    color: #dc3545;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.3s ease;
+}
+
+.view-toggle-btn.active,
+.view-toggle-btn:hover {
+    background: #dc3545;
+    color: white;
+}
+
+/* Results container */
+/*
+.car-auction-results {
+    margin-top: 30px;
+}
+*/
+
+/*
+.car-auction-auto-results {
+    margin-top: 30px;
+}
+*/
+
+/* Hide auto-results when search is performed */
+.car-auction-search-performed .car-auction-auto-results {
+    display: none !important;
+}
+
+.car-auction-loading {
+    text-align: center;
+    padding: 40px;
+    color: #666;
+    font-size: 18px;
+}
+
+.car-auction-load-more-indicator {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+    font-style: italic;
+}
+
+.car-auction-no-results,
+.car-auction-error {
+    text-align: center;
+    padding: 40px;
+    color: #666;
+    font-size: 18px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.car-auction-error {
+    color: #dc3545;
+    background: #f8d7da;
+}
+
+/* Стили для no-results в рамках плагина поиска автомобилей */
+.car-auction-shortcode-wrapper .no-results,
+.car-auction-results .no-results,
+.posts-list .no-results {
+    text-align: center !important;
+    padding: 60px 40px !important;
+    color: #6c757d !important;
+    font-size: 18px !important;
+    background: #f8f9fa !important;
+    border: 1px solid #e9ecef !important;
+    border-radius: 12px !important;
+    margin: 20px 0 !important;
+    position: relative !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+.car-auction-shortcode-wrapper .no-results::before,
+.car-auction-results .no-results::before,
+.posts-list .no-results::before {
+    content: "🔍" !important;
+    display: block !important;
+    font-size: 48px !important;
+    margin-bottom: 15px !important;
+    opacity: 0.6 !important;
+}
+
+.car-auction-shortcode-wrapper .no-results::after,
+.car-auction-results .no-results::after,
+.posts-list .no-results::after {
+    content: "Попробуйте изменить параметры поиска или сбросить фильтры" !important;
+    display: block !important;
+    font-size: 14px !important;
+    color: #adb5bd !important;
+    margin-top: 10px !important;
+}
+
+/* Grid view */
+.car-auction-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 25px;
+    margin-bottom: 30px;
+}
+
+.car-auction-card {
+    background: #fff;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.car-auction-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+}
+
+.car-auction-card-image {
+    position: relative;
+    height: 200px;
+    overflow: hidden;
+}
+
+.car-auction-card-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.3s ease;
+}
+
+.car-auction-card:hover .car-auction-card-image img {
+    transform: scale(1.05);
+}
+
+.car-auction-no-image {
+    height: 100%;
+    background: #f8f9fa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #666;
+    font-size: 16px;
+}
+
+.car-auction-card-content {
+    padding: 20px;
+}
+
+.car-auction-card-title {
+    margin: 0 0 15px 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.car-auction-card-title a {
+    color: #333;
+    text-decoration: none;
+    transition: color 0.3s ease;
+}
+
+.car-auction-card-title a:hover {
+    color: #dc3545;
+}
+
+.car-auction-card-details {
+    margin-bottom: 15px;
+    display: grid;
+    gap: 8px;
+}
+
+.car-detail {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid #f1f3f4;
+}
+
+.car-detail .label {
+    font-weight: 600;
+    color: #666;
+}
+
+.car-detail .value {
+    color: #333;
+}
+
+.car-auction-card-price {
+    margin-bottom: 15px;
+    text-align: center;
+}
+
+.final-price,
+.start-price {
+    font-size: 20px;
+    font-weight: 700;
+    color: #dc3545;
+}
+
+.start-price {
+    color: #28a745;
+}
+
+.car-auction-card-actions {
+    text-align: center;
+}
+
+.car-auction-view-btn {
+    display: inline-block;
+    padding: 10px 25px;
+    background: #dc3545;
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    font-weight: 600;
+    transition: background 0.3s ease;
+}
+
+.car-auction-view-btn:hover {
+    background: #c82333;
+    color: white;
+    text-decoration: none;
+}
+
+/* Table view */
+.car-auction-table {
+    width: 100%;
+    background: #fff;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    margin-bottom: 30px;
+}
+
+.car-auction-table th,
+.car-auction-table td {
+    padding: 15px;
+    text-align: left;
+    border-bottom: 1px solid #f1f3f4;
+}
+
+.car-auction-table th {
+    background: #f8f9fa;
+    font-weight: 600;
+    color: #333;
+}
+
+.car-auction-table tr:hover {
+    background: #f8f9fa;
+}
+
+.car-auction-table img {
+    border-radius: 6px;
+}
+
+.car-auction-table .button {
+    display: inline-block;
+    padding: 8px 16px;
+    background: #dc3545;
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: background 0.3s ease;
+}
+
+.car-auction-table .button:hover {
+    background: #c82333;
+    color: white;
+    text-decoration: none;
+}
+
+/* Load More Button */
+.car-auction-load-more-container {
+    text-align: center;
+    margin: 30px 0;
+}
+
+.car-auction-load-more {
+    padding: 15px 40px;
+    background: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.car-auction-load-more:hover {
+    background: #c82333;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(220, 53, 69, 0.3);
+}
+
+.car-auction-load-more:disabled {
+    background: #6c757d;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+/* Pagination with red button design */
+.car-auction-pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    margin: 30px 0;
+    flex-wrap: wrap;
+}
+
+.page-btn {
+    background-color: #fff;
+    border: 2px solid var(--e22236, #e22236);
+    color: var(--e22236, #e22236);
+    border-radius: 6px;
+    justify-content: center;
+    align-items: center;
+    height: 45px;
+    min-width: 45px;
+    padding: 0 12px;
+    font-size: 1.2vh;
+    font-weight: 600;
+    transition: all 0.2s ease;
+    display: flex;
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.page-btn:hover {
+    background-color: var(--e22236, #e22236);
+    color: white;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(226, 34, 54, 0.3);
+}
+
+.page-btn.active {
+    background-color: var(--e22236, #e22236);
+    color: white;
+    border-color: var(--e22236, #e22236);
+}
+
+.page-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.page-btn.prev,
+.page-btn.next {
+    font-size: 1.2vh;
+    min-width: 50px;
+}
+
+.ellipsis {
+    color: #666;
+    font-weight: 600;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    height: 45px;
+}
+
+/* Load more button container (скрыто по умолчанию) */
+.load-more-wrapper {
+    text-align: center;
+    margin: 20px 0;
+}
+
+.load-more-btn {
+    opacity: 0.5;
+    cursor: not-allowed !important;
+    pointer-events: none;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .car-auction-search-form {
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    
+    .filter-row {
+        grid-template-columns: 1fr;
+        gap: 15px;
+    }
+    
+    .filter-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .car-auction-search-btn,
+    .car-auction-reset-btn {
+        width: 100%;
+        margin-bottom: 10px;
+    }
+    
+    .view-toggle {
+        justify-content: center;
+    }
+
+    .car-auction-pagination {
+        gap: 6px;
+        margin: 20px 0;
+    }
+
+    .page-btn {
+        height: 40px;
+        min-width: 40px;
+        padding: 0 10px;
+        font-size: 0.9vh;
+    }
+
+    .page-btn.prev,
+    .page-btn.next {
+        min-width: 45px;
+    }
+
+    .ellipsis {
+        height: 40px;
+        padding: 0 6px;
+    }
+
+    .car-auction-grid {
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+    
+    .car-auction-card-image {
+        height: 180px;
+    }
+    
+    .car-auction-table {
+        font-size: 14px;
+    }
+    
+    .car-auction-table th,
+    .car-auction-table td {
+        padding: 10px 8px;
+    }
+    
+    .car-auction-load-more {
+        padding: 12px 30px;
+        font-size: 14px;
+    }
+
+    .car-auction-pagination {
+        flex-wrap: wrap;
+        gap: 4px;
+        margin: 15px 0;
+    }
+
+    .page-btn {
+        height: 36px;
+        min-width: 36px;
+        padding: 0 8px;
+        font-size: 1.25vh;
+    }
+
+    .page-btn.prev,
+    .page-btn.next {
+        min-width: 40px;
+        font-size: 1vh;
+    }
+
+    .ellipsis {
+        height: 36px;
+        padding: 0 4px;
+        font-size: 0.9em;
+    }
+}
+
+@media (max-width: 480px) {
+    .car-auction-form-header h2 {
+        font-size: 20px;
+    }
+    
+    .car-auction-card-content {
+        padding: 15px;
+    }
+    
+    .car-auction-card-title {
+        font-size: 16px;
+    }
+    
+    .final-price,
+    .start-price {
+        font-size: 18px;
+    }
+}
+
+/* Loading states */
+.car-auction-search-btn:disabled,
+.car-auction-reset-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Animation for new results */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.car-auction-card {
+    animation: fadeIn 0.6s ease-out;
+}
+
+.car-auction-table tr {
+    animation: fadeIn 0.6s ease-out;
+}
+
+/* */
+
+/* Маленькие планшеты (480px+) - 2 колонки */
+@media (min-width: 480px) {
+  .all-catalogue {
+    grid-column-gap: 16px;
+    grid-row-gap: 16px;
+    grid-template-rows: auto;
+    grid-auto-columns: 1fr;
+    margin-top: 60px;
+    display: grid;
+    
+    /* Mobile First */
+    grid-template-columns: 1fr 1fr;
+    }
+  .one-car-wrapper{
+    width: 100%;
+  }
+  .m-20-500.m-3 {
+      font-size: 1.85em;
+    }
+}
+
+@media (min-width: 480px) and (max-width: 768px) {
+  .price-wrapper {
+    display: flex;
+    font-size: 1.85em;
+    justify-content: space-between;
+    margin-top: 15px;
+    align-items: self-start;
+    gap: 8px;
+    color: var(--e22236);
+    width: 100%;
+    margin-top: 25px;
+    font-weight: 700;
+    clear: right;
+  }
+
+  .price-wrapper > *:first-child {
+    order: 1;
+  }
+
+  .price-wrapper > *:last-child {
+    order: 2;
+  }
+}
+
+.car-props {
+  height: 60px;
+}
+
+/* Планшеты (768px+) - 3 колонки */
+@media (min-width: 768px) {
+  .all-catalogue {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}
+
+/* Десктоп (1024px+) - 4 колонки */
+@media (min-width: 1024px) {
+  .all-catalogue {
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+  }
+  .m-20-500.m-3 {
+      font-size: 0.85em;
+    }
+    .tks-price-container{
+        font-size: 0.85em;
+    }
+}
+
+/* Большие экраны (1280px+) - оптимизация промежутков */
+@media (min-width: 1280px) {
+  .all-catalogue {
+    grid-column-gap: 20px;
+    grid-row-gap: 20px;
+  }
+}
+
+
+
+
+
+
+
+
+
+.auc_list_section {
+    display: flex;
+    gap: 30px;
+    margin-top: 20px;
+}
+
+.auc_img {
+    flex: 0 0 50%;
+}
+
+.auc_img img {
+    width: 100%;
+    height: auto;
+    border-radius: 8px;
+}
+
+.auc_desc {
+    flex: 1;
+}
+
+.h {
+    font-weight: 600;
+    font-size: 18px;
+    margin-bottom: 15px;
+}
+
+.params_table {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.params_table__section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.r {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+}
+
+.r > div:first-child {
+    font-weight: 600;
+    min-width: 30px;
+}
+
+/* Мобильная адаптация */
+@media (max-width: 768px) {
+    .auc_list_section {
+        flex-direction: column;
+        gap: 20px;
+    }
+    
+    .auc_img {
+        flex: none;
+    }
+}
+
+
+
+.one-car-wrapper {
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.one-car-wrapper:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.car-action-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.car-details-btn {
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.car-details-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.car-details-btn.indexing {
+    background: #ffc107 !important;
+    color: #212529 !important;
+}
+
+.car-details-btn.indexed {
+    background: #28a745 !important;
+}
+
+@media (max-width: 768px) {
+    .car-action-buttons {
+        flex-direction: column;
+    }
+
+    .button-red-small {
+        width: 100%;
+        text-align: center;
+    }
+}
+
+

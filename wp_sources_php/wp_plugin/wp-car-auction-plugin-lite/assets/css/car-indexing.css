@@ -1,0 +1,151 @@
+/**
+ * Car Indexing Button Styles
+ */
+
+.car-index-btn {
+    display: inline-block;
+    padding: 10px 20px;
+    background: #0073aa;
+    color: white;
+    text-decoration: none;
+    border-radius: 5px;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.car-index-btn:hover {
+    background: #005a87;
+    color: white;
+    text-decoration: none;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 115, 170, 0.3);
+}
+
+.car-index-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 4px rgba(0, 115, 170, 0.3);
+}
+
+.car-index-btn.loading {
+    background: #ffb900;
+    cursor: not-allowed;
+    animation: pulse 1.5s infinite;
+}
+
+.car-index-btn.loading:hover {
+    background: #e6a600;
+    transform: none;
+    box-shadow: none;
+}
+
+.car-index-btn.success {
+    background: #46b450;
+    animation: none;
+}
+
+.car-index-btn.success:hover {
+    background: #3d9940;
+}
+
+.car-index-btn.error {
+    background: #dc3232;
+    animation: none;
+}
+
+.car-index-btn.error:hover {
+    background: #c92c2c;
+}
+
+.car-index-btn .spinner {
+    display: inline-block;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Car card integration */
+.car-card .car-index-btn {
+    width: 100%;
+    margin-top: 10px;
+}
+
+.car-item .car-index-btn {
+    margin-left: 10px;
+    padding: 8px 16px;
+    font-size: 13px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .car-index-btn {
+        padding: 8px 16px;
+        font-size: 13px;
+    }
+    
+    .car-item .car-index-btn {
+        margin-left: 0;
+        margin-top: 5px;
+        width: 100%;
+    }
+}
+
+/* Loading overlay for better UX */
+.car-index-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s ease;
+}
+
+.car-index-overlay.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+.car-index-overlay .message {
+    background: white;
+    padding: 20px 30px;
+    border-radius: 10px;
+    text-align: center;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    max-width: 400px;
+    margin: 20px;
+}
+
+.car-index-overlay .message h3 {
+    margin: 0 0 10px 0;
+    color: #333;
+}
+
+.car-index-overlay .message p {
+    margin: 0;
+    color: #666;
+}
+
+.car-index-overlay .spinner {
+    font-size: 24px;
+    margin-bottom: 10px;
+}
