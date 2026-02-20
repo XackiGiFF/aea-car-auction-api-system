@@ -111,6 +111,12 @@ jobs:
               exit 1
             fi
 
+            LEGACY_NET=$(grep -E '^LEGACY_SITE_NETWORK_NAME=' "$COMPOSE_DIR/.env" | tail -n1 | cut -d= -f2- || true)
+            if [ -z "$LEGACY_NET" ]; then
+              LEGACY_NET="simpleweb_aea_network"
+            fi
+            docker network inspect "$LEGACY_NET" >/dev/null 2>&1 || docker network create "$LEGACY_NET"
+
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
             docker compose \

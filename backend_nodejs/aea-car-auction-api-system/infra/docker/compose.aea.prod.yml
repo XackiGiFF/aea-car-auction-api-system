@@ -45,6 +45,9 @@ services:
       aea_network:
         aliases:
           - api-gateway-v2
+      legacy_site_network:
+        aliases:
+          - api-gateway-v2
 
   calc-bot-v2:
     image: ghcr.io/${GITHUB_ORG}/calc-bot:${CALC_BOT_TAG:-latest}
@@ -112,3 +115,8 @@ services:
   #     retries: 3
   #   networks:
   #     - aea_network
+
+networks:
+  legacy_site_network:
+    name: ${LEGACY_SITE_NETWORK_NAME:-simpleweb_aea_network}
+    external: true
