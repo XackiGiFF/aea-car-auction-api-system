@@ -92,6 +92,48 @@ async function ensureDir(filePath) {
     await fs.mkdir(dir, { recursive: true });
 }
 
+async function pathExists(targetPath) {
+    try {
+        await fs.access(targetPath);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+function toPosixPath(inputPath) {
+    return String(inputPath || '').split(path.sep).join('/');
+}
+
+async function collectCarIdDirs(providerRootAbs, targetCarIdsSet) {
+    const matches = [];
+    if (!(await pathExists(providerRootAbs))) {
+        return matches;
+    }
+
+    const brands = await fs.readdir(providerRootAbs, { withFileTypes: true });
+    for (const brand of brands) {
+        if (!brand.isDirectory()) continue;
+        const brandAbs = path.join(providerRootAbs, brand.name);
+
+        const models = await fs.readdir(brandAbs, { withFileTypes: true });
+        for (const model of models) {
+            if (!model.isDirectory()) continue;
+            const modelAbs = path.join(brandAbs, model.name);
+
+            const cars = await fs.readdir(modelAbs, { withFileTypes: true });
+            for (const car of cars) {
+                if (!car.isDirectory()) continue;
+                if (targetCarIdsSet.has(car.name)) {
+                    matches.push(path.join(modelAbs, car.name));
+                }
+            }
+        }
+    }
+
+    return matches;
+}
+
 function parseWidthFromRequest(req, relativePath) {
     const queryWidth = String(req.query?.w || '').trim();
     if (queryWidth) {
@@ -281,6 +323,59 @@ app.post('/internal/media/fetch', requireToken, async (req, res) => {
     } catch (error) {
         log(`Fetch failed: ${error.message}`, { sourceUrl });
         return res.status(502).json({ ok: false, error: 'Failed to fetch source image' });
+    }
+});
+
+app.post('/internal/media/delete-by-car-ids', requireToken, async (req, res) => {
+    const provider = sanitizeSegment(req.body?.provider || '', 'unknown-provider');
+    const rawCarIds = Array.isArray(req.body?.car_ids) ? req.body.car_ids : [];
+    const dryRun = Boolean(req.body?.dry_run);
+
+    const carIds = rawCarIds
+        .map((value) => sanitizeSegment(String(value || '').trim(), ''))
+        .filter(Boolean);
+
+    if (carIds.length === 0) {
+        return res.status(400).json({ ok: false, error: 'car_ids must be a non-empty array' });
+    }
+
+    const targetCarIdsSet = new Set(carIds);
+    const deletedDirs = [];
+    const missingRoots = [];
+
+    const providerRoot = path.join(MEDIA_ROOT, provider);
+    const resizedProviderRoot = path.join(MEDIA_ROOT, RESIZE_CACHE_PREFIX, provider);
+    const rootsToScan = [providerRoot, resizedProviderRoot];
+
+    try {
+        for (const rootAbs of rootsToScan) {
+            if (!(await pathExists(rootAbs))) {
+                missingRoots.push(toPosixPath(path.relative(MEDIA_ROOT, rootAbs)));
+                continue;
+            }
+
+            const matchedDirs = await collectCarIdDirs(rootAbs, targetCarIdsSet);
+            for (const dirAbs of matchedDirs) {
+                const rel = toPosixPath(path.relative(MEDIA_ROOT, dirAbs));
+                if (!dryRun) {
+                    await fs.rm(dirAbs, { recursive: true, force: true });
+                }
+                deletedDirs.push(rel);
+            }
+        }
+
+        return res.json({
+            ok: true,
+            provider,
+            requested_car_ids: carIds.length,
+            deleted_dirs: deletedDirs.length,
+            dry_run: dryRun,
+            missing_roots: missingRoots,
+            dirs: deletedDirs
+        });
+    } catch (error) {
+        log(`Delete-by-car-ids failed: ${error.message}`, { provider, carIds: carIds.length });
+        return res.status(500).json({ ok: false, error: 'Failed to delete media by car IDs' });
     }
 });
 

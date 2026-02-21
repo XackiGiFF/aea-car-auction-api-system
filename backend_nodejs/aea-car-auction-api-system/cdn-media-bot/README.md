@@ -12,6 +12,7 @@
 
 - `GET /health`
 - `POST /internal/media/fetch`
+- `POST /internal/media/delete-by-car-ids` (внутреннее удаление папок авто)
 - `GET /cdn/media/*` (статическая раздача сохраненных файлов)
 - `GET /cdn/media/*?w=320` (ресайз до ширины 320 с кешированием)
 - Legacy поддержка: `GET /cdn/media/.../01.webp&w=320`
@@ -26,6 +27,13 @@
 
 Ответ:
 - `ok`, `url`, `cached`
+
+`POST /internal/media/delete-by-car-ids`:
+- Header `x-media-token: <MEDIA_ACCESS_TOKEN>`
+- Body JSON:
+  - `provider` (например `che168`)
+  - `car_ids` (массив ID авто)
+  - `dry_run` (опционально, только показать что будет удалено)
 
 ## Хранилище
 

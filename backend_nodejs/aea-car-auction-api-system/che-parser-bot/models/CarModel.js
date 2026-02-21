@@ -1556,7 +1556,11 @@ class CarModel {
             const batchIds = ids.slice(i, i + batchSize);
             const placeholders = batchIds.map(() => '?').join(',');
             
-            const sql = `UPDATE ${table} SET deleted = 1, updated_at = NOW() WHERE ID IN (${placeholders})`;
+            const sql = `UPDATE ${table}
+                         SET deleted    = 1,
+                             deleted_at = COALESCE(deleted_at, NOW()),
+                             updated_at = NOW()
+                         WHERE ID IN (${placeholders})`;
             
             try {
                 // Просто логируем что происходит
@@ -1748,12 +1752,34 @@ class CarModel {
     async cleanupDeleted(table, olderThanHours = 1) {
         try {
             const hours = Number.isFinite(Number(olderThanHours)) ? parseInt(olderThanHours) : 1;
-            const sql = `DELETE FROM ${table} WHERE deleted = 1 AND deleted_at < DATE_SUB(NOW(), INTERVAL ${hours} HOUR)`;
+            const sql = `DELETE
+                         FROM ${table}
+                         WHERE deleted = 1
+                           AND COALESCE(deleted_at, updated_at) < DATE_SUB(NOW(), INTERVAL ${hours} HOUR)`;
             const result = await db.query(sql);
             return result.affectedRows || 0;
         } catch (error) {
             console.error(`Error cleaning up deleted records for ${table}:`, error.message);
             return 0;
+        }
+    }
+
+    async getDeletedIdsForCleanup(table, olderThanHours = 1, limit = 5000) {
+        try {
+            const hours = Number.isFinite(Number(olderThanHours)) ? parseInt(olderThanHours) : 1;
+            const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, parseInt(limit)) : 5000;
+            const sql = `
+                SELECT ID
+                FROM ${table}
+                WHERE deleted = 1
+                  AND COALESCE(deleted_at, updated_at) < DATE_SUB(NOW(), INTERVAL ? HOUR)
+                LIMIT ?
+            `;
+            const rows = await db.query(sql, [hours, safeLimit]);
+            return rows.map(row => String(row.ID || '').trim()).filter(Boolean);
+        } catch (error) {
+            console.error(`Error getting deleted IDs for cleanup in ${table}:`, error.message);
+            return [];
         }
     }
 

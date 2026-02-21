@@ -24,6 +24,9 @@ class Che168Parser {
         this.mediaServiceUrl = (process.env.MEDIA_SERVICE_URL || '').replace(/\/+$/, '');
         this.mediaServiceToken = process.env.MEDIA_SERVICE_TOKEN || '';
         this.mediaServiceTimeoutMs = Number(process.env.MEDIA_SERVICE_TIMEOUT_MS || 25000);
+        this.purgeDeletedEnabled = String(process.env.PURGE_DELETED_ENABLED || 'true').toLowerCase() === 'true';
+        this.purgeDeletedAfterHours = Number(process.env.PURGE_DELETED_AFTER_HOURS || 48);
+        this.purgeDeletedBatchSize = Number(process.env.PURGE_DELETED_BATCH_SIZE || 5000);
 
         // Словарь для перевода китайских марок на английские
         this.brandTranslations = {
@@ -75,8 +78,7 @@ class Che168Parser {
             '明锐': 'OCTAVIA',
             '雷克萨斯NX': 'NX',
             '缤智': 'VEZEL',
-            '凌渡': 'LAMANDO',
-            '雷凌': 'LEVIN'
+            '凌渡': 'LAMANDO'
         };
 
         // Маппинг цветов
@@ -162,6 +164,11 @@ class Che168Parser {
         const base = `${brand}_${model}_${year}_${mileage}_${price}`;
         const hash = crypto.createHash('md5').update(base).digest('hex');
         return `${hash.substring(0, 12)}`;
+    }
+
+    generateStableExternalId(apiCar) {
+        const normalized = String(apiCar?.carid || '').replace(/[^a-zA-Z0-9]/g, '');
+        return normalized || null;
     }
 
     containsNonAscii(value) {
@@ -396,6 +403,84 @@ class Che168Parser {
         } catch (error) {
             this.log(`Image service failed for ${imageUrl}: ${error.message}`);
             return null;
+        }
+    }
+
+    async syncDeletedCars(currentExternalIds) {
+        try {
+            const CarModel = require('../models/CarModel');
+            const localIds = await CarModel.getLocalIds('che_available');
+            const currentSet = new Set((currentExternalIds || []).filter(Boolean));
+            const staleIds = localIds.filter((id) => !currentSet.has(String(id)));
+
+            if (staleIds.length === 0) {
+                this.log('No stale che168 cars to mark as deleted');
+                return;
+            }
+
+            this.log(`Marking stale che168 cars as deleted: ${staleIds.length}`);
+            await CarModel.markIdsDeleted('che_available', staleIds);
+        } catch (error) {
+            this.log(`Failed to sync deleted cars: ${error.message}`);
+        }
+    }
+
+    async purgeDeletedCarsAndMedia() {
+        if (!this.purgeDeletedEnabled) {
+            return;
+        }
+
+        try {
+            const CarModel = require('../models/CarModel');
+            const staleIds = await CarModel.getDeletedIdsForCleanup(
+                'che_available',
+                this.purgeDeletedAfterHours,
+                this.purgeDeletedBatchSize
+            );
+
+            if (staleIds.length === 0) {
+                this.log('No deleted che168 cars ready for purge');
+                return;
+            }
+
+            this.log(`Purging deleted che168 cars: ${staleIds.length}`);
+            await this.deleteMediaByCarIds(staleIds);
+
+            const deletedRows = await CarModel.cleanupDeleted('che_available', this.purgeDeletedAfterHours);
+            this.log(`Deleted old che168 rows from DB: ${deletedRows}`);
+        } catch (error) {
+            this.log(`Failed to purge deleted che168 cars: ${error.message}`);
+        }
+    }
+
+    async deleteMediaByCarIds(carIds = []) {
+        if (!Array.isArray(carIds) || carIds.length === 0) {
+            return;
+        }
+
+        if (!this.mediaServiceUrl || !this.mediaServiceToken) {
+            this.log('Media service is not configured, skipping media prune');
+            return;
+        }
+
+        try {
+            const response = await axios.post(
+                `${this.mediaServiceUrl}/internal/media/delete-by-car-ids`,
+                {
+                    provider: 'che168',
+                    car_ids: carIds
+                },
+                {
+                    timeout: this.mediaServiceTimeoutMs,
+                    headers: {
+                        'x-media-token': this.mediaServiceToken
+                    }
+                }
+            );
+
+            this.log('Media prune completed', response.data || null);
+        } catch (error) {
+            this.log(`Media prune request failed: ${error.message}`);
         }
     }
 
@@ -921,13 +1006,38 @@ class Che168Parser {
 
             this.log(`Total cars collected: ${allCars.length}`);
 
+            const fullSyncMode = limitPages === null;
+
+            // Убираем дубли в рамках одного цикла парсинга
+            const uniqueCarsById = new Map();
+            for (let i = 0; i < allCars.length; i++) {
+                const car = allCars[i];
+                const externalId = this.generateStableExternalId(car);
+                const dedupeKey = externalId || `unknown_${i}`;
+                if (!uniqueCarsById.has(dedupeKey)) {
+                    uniqueCarsById.set(dedupeKey, car);
+                }
+            }
+
+            const deduplicatedCars = Array.from(uniqueCarsById.values());
+            const externalIds = Array.from(uniqueCarsById.keys());
+            this.log(`Cars after deduplication: ${deduplicatedCars.length}`);
+
+            if (fullSyncMode) {
+                await this.syncDeletedCars(
+                    externalIds.filter((id) => !id.startsWith('unknown_'))
+                );
+            } else {
+                this.log('Partial parse mode detected (--limit), skipping deleted sync and purge');
+            }
+
             // 3. Обрабатываем каждый автомобиль [2]
             let processed = 0;
             let errors = 0;
 
-            for (let i = 0; i < allCars.length; i++) {
-                const car = allCars[i];
-                this.log(`Processing car ${i + 1}/${allCars.length}: ${car.carname}`);
+            for (let i = 0; i < deduplicatedCars.length; i++) {
+                const car = deduplicatedCars[i];
+                this.log(`Processing car ${i + 1}/${deduplicatedCars.length}: ${car.carname}`);
 
                 const success = await this.processCar(car);
                 if (success) {
@@ -937,13 +1047,16 @@ class Che168Parser {
                 }
 
                 // Пауза между запросами автомобилей (5 секунд) [2]
-                if (i < allCars.length - 1) {
+                if (i < deduplicatedCars.length - 1) {
                     this.log(`Waiting 5 seconds before next car...`);
                     await new Promise(resolve => setTimeout(resolve, 5000));
                 }
             }
 
             this.log(`✅ Parsing completed: ${processed} processed, ${errors} errors`);
+            if (fullSyncMode) {
+                await this.purgeDeletedCarsAndMedia();
+            }
         } catch (error) {
             this.log(`❌ Parsing failed:`, error.message);
         } finally {
