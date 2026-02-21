@@ -9,6 +9,7 @@ Docker orchestration для сервисов `aea-car-auction-api-system`.
 - `compose.aea.prod.yml` prod-режим (images из GHCR)
 - `.env.example` шаблон orchestrator-переменных
 - `docker-compose.prod.yml` legacy-файл для совместимости
+- `nginx/cdn-media.conf.example` пример проксирования `/cdn/media/` на `cdn-media-bot-v2`
 
 ## Команды
 
