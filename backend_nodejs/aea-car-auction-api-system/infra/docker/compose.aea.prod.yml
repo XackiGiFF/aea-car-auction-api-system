@@ -18,6 +18,11 @@ services:
     networks:
       aea_network:
         aliases:
+          - api_mariadb_v2
+          - api-mariadb-v2
+      legacy_site_network:
+        aliases:
+          - api_mariadb_v2
           - api-mariadb-v2
 
   api-gateway-v2:
@@ -85,6 +90,8 @@ services:
       DB_HOST: api_mariadb_v2
       DB_PORT: 3306
       NODE_ENV: production
+    volumes:
+      - che_media_data:/app/media
     healthcheck:
       test: ["CMD", "pgrep", "-f", "node"]
       interval: 30s
@@ -120,3 +127,6 @@ networks:
   legacy_site_network:
     name: ${LEGACY_SITE_NETWORK_NAME:-simpleweb_aea_network}
     external: true
+
+volumes:
+  che_media_data:

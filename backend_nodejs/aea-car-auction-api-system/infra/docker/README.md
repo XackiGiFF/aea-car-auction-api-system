@@ -30,6 +30,8 @@ Docker orchestration для сервисов `aea-car-auction-api-system`.
 - Прод-стек запускается как `v2`-сервисы (`api-gateway-v2`, `calc-bot-v2`, `che-parser-bot-v2`, `api-mariadb-v2`) для безопасного параллельного запуска со старым продом.
 - Прод `api-gateway` не публикует порт на хост; доступ к нему из `nginx` через Docker DNS `api-gateway-v2:3000`.
 - Для связки со старым сайтом используется внешняя сеть `LEGACY_SITE_NETWORK_NAME` (по умолчанию `simpleweb_aea_network`).
+- Для `api-mariadb-v2` добавлены алиасы `api_mariadb_v2` и `api-mariadb-v2` в общей сети со старым сайтом (совместимость старых и новых конфигов).
+- Для `che-parser-bot-v2` выделен volume `che_media_data` под локально скачанные изображения (`/app/media`).
 - Для prod использовать image tags вместо `latest`.
 - Файлы `.env` сервисов хранятся вне git.
 
