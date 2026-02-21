@@ -8,8 +8,8 @@ on:
       - "backend_nodejs/aea-car-auction-api-system/api-gateway/**"
       - "backend_nodejs/aea-car-auction-api-system/calc-bot/**"
       - "backend_nodejs/aea-car-auction-api-system/che-parser-bot/**"
-      - "backend_nodejs/aea-car-auction-api-system/infra/docker/compose.base.yml"
-      - "backend_nodejs/aea-car-auction-api-system/infra/docker/compose.aea.prod.yml"
+      - "backend_nodejs/aea-car-auction-api-system/cdn-media-bot/**"
+      - "backend_nodejs/aea-car-auction-api-system/infra/docker/**"
   workflow_dispatch:
 
 permissions:
@@ -36,6 +36,9 @@ jobs:
           - service: che-parser-bot
             context: backend_nodejs/aea-car-auction-api-system/che-parser-bot
             image: ghcr.io/${{ github.repository_owner }}/che-parser-bot
+          - service: cdn-media-bot
+            context: backend_nodejs/aea-car-auction-api-system/cdn-media-bot
+            image: ghcr.io/${{ github.repository_owner }}/cdn-media-bot
 
     steps:
       - name: Checkout
@@ -112,6 +115,12 @@ jobs:
               exit 1
             fi
 
+            LEGACY_NET=$(grep -E '^LEGACY_SITE_NETWORK_NAME=' "$COMPOSE_DIR/.env" | tail -n1 | cut -d= -f2- || true)
+            if [ -z "$LEGACY_NET" ]; then
+              LEGACY_NET="simpleweb_aea_network"
+            fi
+            docker network inspect "$LEGACY_NET" >/dev/null 2>&1 || docker network create "$LEGACY_NET"
+
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
             docker compose \
@@ -124,6 +133,6 @@ jobs:
               -f "$COMPOSE_DIR/compose.base.yml" \
               -f "$COMPOSE_DIR/compose.aea.prod.yml" \
               --env-file "$COMPOSE_DIR/.env" \
-              up -d --remove-orphans
+              up -d
 
             docker logout ghcr.io

@@ -49,22 +49,11 @@ class Car_Auction_Auto_Creator {
 
         try {
             // Check if post already exists
-            $existing_posts = get_posts(array(
-                'post_type' => 'auto',
-                'meta_query' => array(
-                    array(
-                        'key' => '_car_auction_id',
-                        'value' => $car_id,
-                        'compare' => '='
-                    )
-                ),
-                'posts_per_page' => 1
-            ));
-
-            if (!empty($existing_posts)) {
+            $existing_post_id = $this->find_existing_auto_post_id($car_id);
+            if ($existing_post_id) {
                 // Post already exists, mark queue as completed
-                $this->update_queue_status($car_id, $market, 'completed', null, $existing_posts[0]->ID);
-                return $existing_posts[0]->ID;
+                $this->update_queue_status($car_id, $market, 'completed', null, $existing_post_id);
+                return $existing_post_id;
             }
         
         $car_data = $this->api->get_car_details($car_id, $market);
@@ -162,6 +151,26 @@ class Car_Auction_Auto_Creator {
             $this->update_queue_status($car_id, $market, 'failed', $e->getMessage());
             return false;
         }
+    }
+
+    private function find_existing_auto_post_id(string $car_id): ?int
+    {
+        global $wpdb;
+
+        $post_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT p.ID
+             FROM {$wpdb->posts} p
+             INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID
+             WHERE pm.meta_key = '_car_auction_id'
+               AND pm.meta_value = %s
+               AND p.post_type = 'auto'
+               AND p.post_status IN ('publish', 'future', 'draft', 'pending', 'private')
+             ORDER BY p.ID DESC
+             LIMIT 1",
+            $car_id
+        ));
+
+        return $post_id ? intval($post_id) : null;
     }
     
     /**

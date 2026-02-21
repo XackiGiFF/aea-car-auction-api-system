@@ -285,7 +285,17 @@ class Render_Detail_Page {
                                 <div class="price-car-wrapper">
                                     <div class="one-char-left m-16-400 gray">Стоимость</div>
                                     <div class="one-char-right m-16-400">
-                                        <span id="car-price-value" class="car-price-loading">Расчет стоимости...</span>
+                                        <?php
+                                        $initial_calc_price = '';
+                                        if (isset($car['calc_rub']) && is_numeric($car['calc_rub']) && (float)$car['calc_rub'] > 0) {
+                                            $initial_calc_price = number_format((float)$car['calc_rub'], 0, '.', ' ') . ' ₽';
+                                        }
+                                        ?>
+                                        <span
+                                            id="car-price-value"
+                                            class="car-price-loading"
+                                            data-initial-price="<?php echo esc_attr($initial_calc_price); ?>"
+                                        ><?php echo esc_html($initial_calc_price !== '' ? $initial_calc_price : 'Расчет стоимости...'); ?></span>
                                     </div>
                                 </div>
                                 <div class="price-desc-text">Стоимость является ориентировочной. Точную стоимость конкретного автомобиля уточняйте у наших менеджеров.</div>
@@ -441,6 +451,7 @@ class Render_Detail_Page {
             jQuery(document).ready(function($) {
                 var $placeholder = $('#similar-cars-placeholder');
                 var $priceValue = $('#car-price-value');
+                var initialPrice = $priceValue.data('initial-price') || '';
                 var ajaxUrl = '<?php echo admin_url('admin-ajax.php'); ?>';
 
                 if ($priceValue.length) {
@@ -458,11 +469,11 @@ class Render_Detail_Page {
                             if (response && response.success && response.data && response.data.formatted_price) {
                                 $priceValue.text(response.data.formatted_price).removeClass('car-price-loading');
                             } else {
-                                $priceValue.text('по запросу').removeClass('car-price-loading');
+                                $priceValue.text(initialPrice || 'по запросу').removeClass('car-price-loading');
                             }
                         },
                         error: function() {
-                            $priceValue.text('по запросу').removeClass('car-price-loading');
+                            $priceValue.text(initialPrice || 'по запросу').removeClass('car-price-loading');
                         }
                     });
                 }

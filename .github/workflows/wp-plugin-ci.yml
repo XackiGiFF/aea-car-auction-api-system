@@ -6,7 +6,7 @@ on:
       - "wp_sources_php/wp_plugin/wp-car-auction-plugin-lite/**"
       - ".github/workflows/wp-plugin-ci.yml"
   push:
-    branches: ["main"]
+    branches: ["main", "prod"]
     paths:
       - "wp_sources_php/wp_plugin/wp-car-auction-plugin-lite/**"
       - ".github/workflows/wp-plugin-ci.yml"

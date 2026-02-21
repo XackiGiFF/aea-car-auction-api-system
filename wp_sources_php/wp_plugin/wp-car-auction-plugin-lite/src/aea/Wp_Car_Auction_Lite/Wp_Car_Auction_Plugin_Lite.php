@@ -94,7 +94,9 @@ class Wp_Car_Auction_Plugin_Lite {
             KEY market (market),
             KEY brand (brand),
             KEY model (model),
-            KEY year (year)
+            KEY year (year),
+            KEY indexed_at (indexed_at),
+            KEY market_indexed_at (market, indexed_at)
         ) $charset_collate;";
 
         require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
@@ -136,6 +138,8 @@ class Wp_Car_Auction_Plugin_Lite {
             UNIQUE KEY car_id_market (car_id, market),
             KEY status (status),
             KEY scheduled_at (scheduled_at),
+            KEY status_scheduled (status, scheduled_at),
+            KEY status_attempts (status, attempts),
             KEY market (market),
             KEY wp_post_id (wp_post_id)
         ) $charset_collate;";
@@ -561,43 +565,129 @@ class Wp_Car_Auction_Plugin_Lite {
      */
     public function process_delayed_posts(): void
     {
-        // This method processes any cars that were scheduled for delayed post creation
-        // but haven't been processed yet due to server limits or errors
+        $lock_key = 'car_auction_process_delayed_posts_lock';
+        if (!$this->acquire_cron_lock($lock_key, 10 * MINUTE_IN_SECONDS)) {
+            error_log('Car Auction: Skipped delayed posts run - worker is already running');
+            return;
+        }
 
+        // Process only queue items to avoid expensive joins with wp_postmeta
         global $wpdb;
-        $indexed_table = $wpdb->prefix . 'car_auction_indexed';
+        $queue_table = $wpdb->prefix . 'car_auction_post_queue';
 
-        // Find cars that were indexed but don't have WordPress posts yet
-        $cars_without_posts = $wpdb->get_results("
-            SELECT ci.car_id, ci.market
-            FROM {$indexed_table} ci
-            LEFT JOIN {$wpdb->postmeta} pm ON pm.meta_value = ci.car_id AND pm.meta_key = '_car_auction_id'
-            WHERE pm.meta_id IS NULL
-            AND ci.indexed_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
-            LIMIT 10
-        ");
+        try {
+            if (!class_exists('aea\Wp_Car_Auction_Lite\core\Car_Auction_Auto_Creator')) {
+                return;
+            }
 
-        if (!empty($cars_without_posts) && class_exists('aea\Wp_Car_Auction_Lite\core\Car_Auction_Auto_Creator')) {
+            $batch_size = intval(get_option('car_auction_delayed_posts_batch_size', 10));
+            $batch_size = max(1, min(50, $batch_size));
+            $max_attempts = intval(get_option('car_auction_delayed_posts_max_attempts', 5));
+            $max_attempts = max(1, min(20, $max_attempts));
+
+            $queue_items = $wpdb->get_results($wpdb->prepare(
+                "SELECT id, car_id, market, attempts
+                 FROM {$queue_table}
+                 WHERE status IN ('pending', 'failed')
+                   AND scheduled_at <= NOW()
+                   AND attempts < %d
+                 ORDER BY scheduled_at ASC
+                 LIMIT %d",
+                $max_attempts,
+                $batch_size
+            ));
+
+            if (empty($queue_items)) {
+                return;
+            }
+
             $auto_creator = $this::getCarAuctionAutoCreator();
             $processed = 0;
+            $skipped = 0;
+            $failed = 0;
+            $rescheduled = 0;
 
-            foreach ($cars_without_posts as $car_row) {
-                $post_id = $auto_creator->create_car_post($car_row->car_id, $car_row->market);
+            foreach ($queue_items as $item) {
+                $wpdb->update(
+                    $queue_table,
+                    array(
+                        'status' => 'processing',
+                        'processed_at' => current_time('mysql')
+                    ),
+                    array('id' => intval($item->id)),
+                    array('%s', '%s'),
+                    array('%d')
+                );
+
+                $post_id = $auto_creator->create_car_post($item->car_id, $item->market);
                 if ($post_id) {
                     $processed++;
-                    error_log("Car Auction: Created delayed post ID {$post_id} for car {$car_row->car_id}");
+                    continue;
                 }
 
-                // Limit processing to avoid timeouts
-                if ($processed >= 5) {
-                    break;
+                $queue_row = $wpdb->get_row($wpdb->prepare(
+                    "SELECT status, attempts FROM {$queue_table} WHERE id = %d",
+                    intval($item->id)
+                ));
+
+                if (!$queue_row) {
+                    $failed++;
+                    continue;
                 }
+
+                if ($queue_row->status === 'skipped') {
+                    $skipped++;
+                    continue;
+                }
+
+                if ($queue_row->status === 'completed') {
+                    $processed++;
+                    continue;
+                }
+
+                $attempts = intval($queue_row->attempts);
+                if ($attempts >= $max_attempts) {
+                    $failed++;
+                    continue;
+                }
+
+                // Exponential backoff for retries: 5, 10, 20, 40, 80 min (max 120)
+                $retry_minutes = min(120, 5 * (2 ** max(0, $attempts - 1)));
+                $next_run = date('Y-m-d H:i:s', current_time('timestamp') + ($retry_minutes * MINUTE_IN_SECONDS));
+
+                $wpdb->update(
+                    $queue_table,
+                    array(
+                        'status' => 'pending',
+                        'scheduled_at' => $next_run
+                    ),
+                    array('id' => intval($item->id)),
+                    array('%s', '%s'),
+                    array('%d')
+                );
+                $rescheduled++;
             }
 
-            if ($processed > 0) {
-                error_log("Car Auction Plugin: Processed {$processed} delayed posts");
-            }
+            error_log(
+                "Car Auction: Delayed posts run completed - processed={$processed}, skipped={$skipped}, failed={$failed}, rescheduled={$rescheduled}"
+            );
+        } finally {
+            $this->release_cron_lock($lock_key);
         }
+    }
+
+    private function acquire_cron_lock(string $key, int $ttl_seconds): bool
+    {
+        if (get_transient($key)) {
+            return false;
+        }
+        set_transient($key, strval(time()), $ttl_seconds);
+        return true;
+    }
+
+    private function release_cron_lock(string $key): void
+    {
+        delete_transient($key);
     }
 
     /**
