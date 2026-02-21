@@ -4,6 +4,7 @@ const ProviderFactory = require('../providers/ProviderFactory');
 class CarModel {
     constructor() {
         this.tables = ['main', 'korea', 'china', 'bike'];
+        this.tableColumnsCache = new Map();
     }
 
     /**
@@ -24,7 +25,7 @@ class CarModel {
 
             // 3. Сохраняем в БД в фоне (Fire-and-forget)
             // Не ждем await, чтобы отдать ответ пользователю быстрее
-            if (cars.length > 0) {
+            if (cars.length > 0 && this._shouldSyncWithDatabase(provider, table)) {
                 this.saveCarsToDatabase(cars, table).catch(err =>
                     console.error(`[Background] Error saving cars to ${table}:`, err.message)
                 );
@@ -65,9 +66,11 @@ class CarModel {
             const cars = rawCars.map(car => this._normalizeCarData(car));
 
             // Г. Сохраняем в фоне (обновляем данные, не трогая цены)
-            this.saveCarsToDatabase(cars, table).catch(err =>
-                console.error(`[Background] Error saving cars to ${table}:`, err.message)
-            );
+            if (this._shouldSyncWithDatabase(provider, table)) {
+                this.saveCarsToDatabase(cars, table).catch(err =>
+                    console.error(`[Background] Error saving cars to ${table}:`, err.message)
+                );
+            }
 
             return rawCars.map(car => this._normalizeCarData(car));
         } catch (error) {
@@ -104,7 +107,9 @@ class CarModel {
             if (rawCar) {
 
                 // Сохраняем актуальное состояние
-                await this.saveCarToDatabase(rawCar, table).catch(err => console.error(err));
+                if (this._shouldSyncWithDatabase(provider, table)) {
+                    await this.saveCarToDatabase(rawCar, table).catch(err => console.error(err));
+                }
 
                 return this._normalizeCarData(rawCar);
             }
@@ -123,13 +128,13 @@ class CarModel {
     async getCarPriceById(carId, table = 'main', provider = 'ajes') {
         // Так как AJES не дает отдельный эндпоинт цены, мы возвращаем
         // расчетную цену из локальной базы или null
+        let connection;
         try {
-            const connection = await db.getConnection();
+            connection = await db.getConnection();
             const [rows] = await connection.execute(
                 `SELECT CALC_RUB, CALC_UPDATED_AT FROM ${table} WHERE ID = ?`,
                 [carId]
             );
-            connection.release();
 
             if (rows.length > 0) {
                 return {
@@ -140,6 +145,10 @@ class CarModel {
             return null;
         } catch (error) {
             return null;
+        } finally {
+            if (connection) {
+                connection.release();
+            }
         }
     }
 
@@ -248,7 +257,7 @@ class CarModel {
 
     async _getLocalCarById(carId, table) {
         try {
-            const [rows] = await db.query(`SELECT * FROM ${table} WHERE ID = ?`, [carId]);
+            const rows = await db.query(`SELECT * FROM ${table} WHERE ID = ?`, [carId]);
             return rows.length > 0 ? rows[0] : null;
         } catch (e) { return null; }
     }
@@ -301,7 +310,7 @@ class CarModel {
         if (!cars || cars.length === 0) return;
 
         // Список полей, которые есть в вашей таблице и которые мы обновляем данными с API
-        const columns = [
+        const preferredColumns = [
             'ID', 'AUCTION_DATE', 'MARKA_NAME', 'MODEL_NAME', 'YEAR',
             'MILEAGE', 'ENG_V', 'PW', 'KPP', 'PRIV', 'TIME', 'START', 'FINISH',
             'AVG_PRICE', 'IMAGES', 'RATE', 'LOT', 'STATUS', 'AUCTION'
@@ -309,11 +318,20 @@ class CarModel {
             // чтобы мы не пытались писать их в базу или затирать существующие.
         ];
 
+        let connection;
         try {
             const validCars = cars.filter(c => c && c.ID);
             if (validCars.length === 0) return;
 
-            const connection = await db.getConnection();
+            const availableColumns = await this._getTableColumns(table);
+            const columns = preferredColumns.filter(col => availableColumns.has(col));
+
+            if (!columns.includes('ID')) {
+                console.warn(`[DB] Table ${table} does not contain ID column, skipping sync`);
+                return;
+            }
+
+            connection = await db.getConnection();
 
             const placeholders = `(${columns.map(() => '?').join(', ')})`;
             const allPlaceholders = validCars.map(() => placeholders).join(', ');
@@ -321,7 +339,7 @@ class CarModel {
             let values = [];
             validCars.forEach(car => {
                 columns.forEach(col => {
-                    values.push(car[col] !== undefined ? car[col] : null);
+                    values.push(this._getColumnValue(car, col));
                 });
             });
 
@@ -338,73 +356,103 @@ class CarModel {
             `;
 
             await connection.execute(sql, values);
-            connection.release();
 
         } catch (error) {
             console.error(`Error saving cars to ${table}:`, error.message);
+            this.tableColumnsCache.delete(table);
+        } finally {
+            if (connection) {
+                connection.release();
+            }
         }
     }
 
     async saveCarToDatabase(carData, table = 'main') {
+        let connection;
         try {
-            if (!carData || !carData.ID) {
+            const normalizedId = String(carData?.ID || carData?.id || '').trim();
+            if (!carData || !normalizedId) {
                 console.log('❌ No car ID provided for saving');
                 return 'error';
             }
-            delete carData.transmission_name;
-            delete carData.transmission_group;
-            delete carData.drive_group;
-            delete carData.fuel_name;
-            delete carData.fuel_groups;
-            delete carData.raw_finish;
-            delete carData.STOCK_PRICE;
-            delete carData.CALC_RUB;
-            delete carData.tks_type;
+            const savePayload = { ...carData, ID: normalizedId };
+            delete savePayload.transmission_name;
+            delete savePayload.transmission_group;
+            delete savePayload.drive_group;
+            delete savePayload.fuel_name;
+            delete savePayload.fuel_groups;
+            delete savePayload.raw_finish;
+            delete savePayload.STOCK_PRICE;
+            delete savePayload.CALC_RUB;
+            delete savePayload.tks_type;
 
-            const connection = await db.getConnection();
+            const preferredColumns = [
+                'ID', 'AUCTION_DATE', 'MARKA_NAME', 'MODEL_NAME', 'YEAR',
+                'MILEAGE', 'ENG_V', 'PW', 'KPP', 'PRIV', 'TIME', 'START', 'FINISH',
+                'AVG_PRICE', 'PRICE_CALC', 'CALC_RUB', 'CALC_UPDATED_AT', 'IMAGES'
+            ];
+            const availableColumns = await this._getTableColumns(table);
+            const columns = preferredColumns.filter(col => availableColumns.has(col));
+            if (!columns.includes('ID')) {
+                console.warn(`[DB] Table ${table} does not contain ID column, skipping single save`);
+                return 'error';
+            }
+
+            connection = await db.getConnection();
 
             try {
                 // Проверяем существование
                 const [existing] = await connection.execute(
                     `SELECT ID FROM ${table} WHERE ID = ?`,
-                    [carData.ID]
+                    [savePayload.ID]
                 );
-
-                const columns = [
-                    'ID', 'AUCTION_DATE', 'MARKA_NAME', 'MODEL_NAME', 'YEAR',
-                    'MILEAGE', 'ENG_V', 'PW', 'KPP', 'PRIV', 'TIME', 'START', 'FINISH',
-                    'AVG_PRICE', 'PRICE_CALC', 'CALC_RUB', 'CALC_UPDATED_AT', 'IMAGES'
-                ];
 
                 if (existing.length > 0) {
                     // Обновляем
                     const updateFields = columns.filter(col => col !== 'ID').map(col => `${col} = ?`).join(', ');
-                    const values = columns.filter(col => col !== 'ID').map(col => carData[col] || null);
-                    values.push(carData.ID);
+                    const values = columns
+                        .filter(col => col !== 'ID')
+                        .map(col => this._getColumnValue(savePayload, col));
+                    values.push(savePayload.ID);
+
+                    const trailingUpdates = [];
+                    if (availableColumns.has('CALC_UPDATED_AT')) {
+                        trailingUpdates.push('CALC_UPDATED_AT = NOW()');
+                    }
+                    if (availableColumns.has('updated_at')) {
+                        trailingUpdates.push('updated_at = CURRENT_TIMESTAMP');
+                    }
+                    const setClause = [updateFields, ...trailingUpdates].filter(Boolean).join(', ');
+                    if (!setClause) {
+                        return 'updated';
+                    }
 
                     await connection.execute(
-                        `UPDATE ${table} SET ${updateFields}, CALC_UPDATED_AT = NOW() WHERE ID = ?`,
+                        `UPDATE ${table} SET ${setClause} WHERE ID = ?`,
                         values
                     );
-                    console.log(`✓ Car ${carData.ID} updated in ${table}`);
+                    console.log(`✓ Car ${savePayload.ID} updated in ${table}`);
                     return 'updated';
                 } else {
                     // Вставляем
                     const placeholders = columns.map(() => '?').join(', ');
-                    const values = columns.map(col => carData[col] || null);
+                    const values = columns.map(col => this._getColumnValue(savePayload, col));
 
                     await connection.execute(
                         `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`,
                         values
                     );
-                    console.log(`✓ Car ${carData.ID} inserted into ${table}`);
+                    console.log(`✓ Car ${savePayload.ID} inserted into ${table}`);
                     return 'inserted';
                 }
             } finally {
-                connection.release();
+                if (connection) {
+                    connection.release();
+                }
             }
         } catch (error) {
             console.error(`Error saving car ${carData?.ID} to database:`, error.message);
+            this.tableColumnsCache.delete(table);
             return 'error';
         }
     }
@@ -424,6 +472,36 @@ class CarModel {
         return this.tables;
     }
 
+    _shouldSyncWithDatabase(provider, table) {
+        return !(provider === 'che-168' && table === 'che_available');
+    }
+
+    _getColumnValue(car, column) {
+        if (column === 'ID') {
+            return String(car.ID || car.id || '').trim() || null;
+        }
+        return car[column] !== undefined ? car[column] : null;
+    }
+
+    async _getTableColumns(table) {
+        if (this.tableColumnsCache.has(table)) {
+            return this.tableColumnsCache.get(table);
+        }
+
+        let connection;
+        try {
+            connection = await db.getConnection();
+            const [rows] = await connection.execute(`SHOW COLUMNS FROM ${table}`);
+            const columns = new Set(rows.map(row => row.Field));
+            this.tableColumnsCache.set(table, columns);
+            return columns;
+        } finally {
+            if (connection) {
+                connection.release();
+            }
+        }
+    }
+
     /**
      * Проверяет массив машин с API на наличие сохраненных цен в локальной БД.
      * Если цена есть - подставляет её в объект.
@@ -436,8 +514,9 @@ class CarModel {
 
         if (ids.length === 0) return cars;
 
+        let connection;
         try {
-            const connection = await db.getConnection();
+            connection = await db.getConnection();
 
             // Создаем строку плейсхолдеров (?,?,?)
             const placeholders = ids.map(() => '?').join(',');
@@ -447,7 +526,6 @@ class CarModel {
                 `SELECT ID, CALC_RUB FROM ${table} WHERE ID IN (${placeholders})`,
                 ids
             );
-            connection.release();
 
             // Создаем Map:  "7Sc6Vvt0UGttPA" -> { CALC_RUB: 123 }
             const priceMap = new Map();
@@ -475,6 +553,10 @@ class CarModel {
         } catch (error) {
             console.error('Error merging local prices:', error.message);
             return cars;
+        } finally {
+            if (connection) {
+                connection.release();
+            }
         }
     }
 
@@ -482,6 +564,7 @@ class CarModel {
      * Поиск чисто по локальной базе (когда есть фильтр цены)
      */
     async _getLocalCarsWithFilters(filters, table) {
+        let connection;
         try {
             const conditions = ['1=1'];
             const params = [];
@@ -537,9 +620,8 @@ class CarModel {
             const whereClause = conditions.join(' AND ');
             const sql = `SELECT * FROM ${table} WHERE ${whereClause} ORDER BY ID DESC LIMIT ${limit} OFFSET ${offset}`;
 
-            const connection = await db.getConnection();
+            connection = await db.getConnection();
             const [rows] = await connection.execute(sql, params);
-            connection.release();
 
             // Важно: данные из базы тоже прогоняем через нормализатор
             return rows.map(car => this._normalizeCarData(car));
@@ -547,6 +629,10 @@ class CarModel {
         } catch (error) {
             console.error('Error searching local DB:', error.message);
             return [];
+        } finally {
+            if (connection) {
+                connection.release();
+            }
         }
     }
 }
