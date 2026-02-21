@@ -43,6 +43,7 @@ class CheParserApp {
 
             // Создаем таблицу che_available если ее нет
             await this.createCheAvailableTable();
+            await this.reconcileCheAvailableSchema();
 
             console.log('✅ Che Parser bot initialized');
         } catch (error) {
@@ -56,6 +57,9 @@ class CheParserApp {
             CREATE TABLE IF NOT EXISTS che_available (
                 ID VARCHAR(50) PRIMARY KEY,
                 SOURCE VARCHAR(20) DEFAULT 'che168',
+                AUCTION_DATE DATETIME NULL,
+                AUCTION VARCHAR(255) NULL,
+                LOT VARCHAR(50) NULL,
                 MARKA_ID VARCHAR(10),
                 MARKA_NAME VARCHAR(255),
                 MODEL_ID VARCHAR(10),
@@ -100,7 +104,8 @@ class CheParserApp {
                 INDEX idx_calc_rub (CALC_RUB),
                 INDEX idx_calc_updated (CALC_UPDATED_AT),
                 INDEX idx_source (SOURCE),
-                INDEX idx_status (STATUS)
+                INDEX idx_status (STATUS),
+                INDEX idx_auction_date (AUCTION_DATE)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         `;
 
@@ -110,6 +115,44 @@ class CheParserApp {
             console.log('✅ Table che_available created/verified');
         } catch (error) {
             console.error('❌ Error creating che_available table:', error.message);
+        }
+    }
+
+    async reconcileCheAvailableSchema() {
+        const db = require('./config/database');
+
+        const columnMigrations = [
+            `ALTER TABLE che_available ADD COLUMN AUCTION_DATE DATETIME NULL AFTER SOURCE`,
+            `ALTER TABLE che_available ADD COLUMN AUCTION VARCHAR(255) NULL AFTER AUCTION_DATE`,
+            `ALTER TABLE che_available ADD COLUMN LOT VARCHAR(50) NULL AFTER AUCTION`
+        ];
+
+        const indexMigrations = [
+            `ALTER TABLE che_available ADD INDEX idx_auction_date (AUCTION_DATE)`
+        ];
+
+        for (const sql of columnMigrations) {
+            try {
+                await db.query(sql);
+                console.log(`✅ Schema migration applied: ${sql}`);
+            } catch (error) {
+                if (/Duplicate column name/i.test(error.message)) {
+                    continue;
+                }
+                console.error(`❌ Schema migration failed: ${sql}`, error.message);
+            }
+        }
+
+        for (const sql of indexMigrations) {
+            try {
+                await db.query(sql);
+                console.log(`✅ Index migration applied: ${sql}`);
+            } catch (error) {
+                if (/Duplicate key name/i.test(error.message)) {
+                    continue;
+                }
+                console.error(`❌ Index migration failed: ${sql}`, error.message);
+            }
         }
     }
 
