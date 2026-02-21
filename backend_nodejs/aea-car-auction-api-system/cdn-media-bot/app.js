@@ -1,8 +1,10 @@
 const express = require('express');
 const helmet = require('helmet');
 const axios = require('axios');
+const sharp = require('sharp');
 const crypto = require('crypto');
 const fs = require('fs/promises');
+const fsSync = require('fs');
 const path = require('path');
 require('dotenv').config();
 
@@ -21,18 +23,14 @@ const MEDIA_SOURCE_REFERER = process.env.MEDIA_SOURCE_REFERER || 'https://www.ch
 const MEDIA_SOURCE_USER_AGENT = process.env.MEDIA_SOURCE_USER_AGENT || 'Mozilla/5.0';
 const MEDIA_TIMEOUT_MS = Number(process.env.MEDIA_TIMEOUT_MS || 25000);
 const MEDIA_MAX_BYTES = Number(process.env.MEDIA_MAX_BYTES || 20 * 1024 * 1024);
+const RESIZE_TARGET_WIDTH = 320;
+const RESIZE_CACHE_PREFIX = '_resized';
 
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginResourcePolicy: { policy: 'cross-origin' }
 }));
 app.use(express.json({ limit: '512kb' }));
-app.use('/cdn/media', express.static(MEDIA_ROOT, {
-    fallthrough: false,
-    index: false,
-    etag: true,
-    maxAge: NODE_ENV === 'production' ? '7d' : 0
-}));
 
 function log(message, data = null) {
     const ts = new Date().toISOString();
@@ -94,6 +92,68 @@ async function ensureDir(filePath) {
     await fs.mkdir(dir, { recursive: true });
 }
 
+function parseWidthFromRequest(req, relativePath) {
+    const queryWidth = String(req.query?.w || '').trim();
+    if (queryWidth) {
+        return { width: queryWidth, path: relativePath };
+    }
+
+    // Legacy format support: /cdn/media/.../01.webp&w=320
+    const legacyMatch = relativePath.match(/^(.*)&w=(\d+)$/);
+    if (!legacyMatch) {
+        return { width: '', path: relativePath };
+    }
+
+    return {
+        width: legacyMatch[2],
+        path: legacyMatch[1]
+    };
+}
+
+function normalizeRelativePath(rawPath) {
+    let decoded = '';
+    try {
+        decoded = decodeURIComponent(String(rawPath || ''));
+    } catch (_) {
+        return null;
+    }
+
+    const clean = decoded
+        .replace(/\\/g, '/')
+        .replace(/^\/+/, '');
+
+    const parts = clean.split('/').filter(Boolean);
+    if (parts.some((part) => part === '.' || part === '..')) {
+        return null;
+    }
+
+    return parts.join('/');
+}
+
+function resolvePathInsideRoot(relativePath) {
+    const absPath = path.resolve(MEDIA_ROOT, relativePath);
+    const rootPath = path.resolve(MEDIA_ROOT);
+
+    if (absPath !== rootPath && !absPath.startsWith(`${rootPath}${path.sep}`)) {
+        return null;
+    }
+
+    return absPath;
+}
+
+function buildResizedRelativePath(relativePath, width) {
+    const parsed = path.parse(relativePath);
+    const fileName = `${parsed.name}.w${width}${parsed.ext || '.jpg'}`;
+    const dir = parsed.dir ? path.posix.join(RESIZE_CACHE_PREFIX, parsed.dir) : RESIZE_CACHE_PREFIX;
+    return path.posix.join(dir, fileName);
+}
+
+function sendMediaFile(res, absPath) {
+    const cacheControl = NODE_ENV === 'production' ? 'public, max-age=604800' : 'no-cache';
+    res.setHeader('Cache-Control', cacheControl);
+    return res.sendFile(absPath);
+}
+
 function requireToken(req, res, next) {
     if (!MEDIA_ACCESS_TOKEN) {
         return res.status(500).json({ ok: false, error: 'MEDIA_ACCESS_TOKEN is not configured' });
@@ -113,6 +173,51 @@ app.get('/health', async (req, res) => {
         service: 'cdn-media-bot',
         node_env: NODE_ENV
     });
+});
+
+app.get('/cdn/media/*', async (req, res) => {
+    const rawPath = String(req.params[0] || '');
+    const parsedWidth = parseWidthFromRequest(req, rawPath);
+    const normalizedPath = normalizeRelativePath(parsedWidth.path);
+
+    if (!normalizedPath) {
+        return res.status(400).send('Bad media path');
+    }
+
+    const sourceAbsPath = resolvePathInsideRoot(normalizedPath);
+    if (!sourceAbsPath) {
+        return res.status(400).send('Bad media path');
+    }
+
+    if (!fsSync.existsSync(sourceAbsPath)) {
+        return res.status(404).send('Not found');
+    }
+
+    // Resize only for w=320, any other width returns original image.
+    if (parsedWidth.width !== String(RESIZE_TARGET_WIDTH)) {
+        return sendMediaFile(res, sourceAbsPath);
+    }
+
+    try {
+        const resizedRelPath = buildResizedRelativePath(normalizedPath, RESIZE_TARGET_WIDTH);
+        const resizedAbsPath = resolvePathInsideRoot(resizedRelPath);
+        if (!resizedAbsPath) {
+            return sendMediaFile(res, sourceAbsPath);
+        }
+
+        if (!fsSync.existsSync(resizedAbsPath)) {
+            await ensureDir(resizedAbsPath);
+            await sharp(sourceAbsPath)
+                .rotate()
+                .resize({ width: RESIZE_TARGET_WIDTH, withoutEnlargement: true })
+                .toFile(resizedAbsPath);
+        }
+
+        return sendMediaFile(res, resizedAbsPath);
+    } catch (error) {
+        log(`Resize failed, fallback to original: ${error.message}`, { path: normalizedPath });
+        return sendMediaFile(res, sourceAbsPath);
+    }
 });
 
 app.post('/internal/media/fetch', requireToken, async (req, res) => {

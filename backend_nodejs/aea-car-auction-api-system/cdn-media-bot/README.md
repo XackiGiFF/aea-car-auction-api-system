@@ -13,6 +13,8 @@
 - `GET /health`
 - `POST /internal/media/fetch`
 - `GET /cdn/media/*` (статическая раздача сохраненных файлов)
+- `GET /cdn/media/*?w=320` (ресайз до ширины 320 с кешированием)
+- Legacy поддержка: `GET /cdn/media/.../01.webp&w=320`
 
 Требования к `POST /internal/media/fetch`:
 - Header `x-media-token: <MEDIA_ACCESS_TOKEN>`
@@ -28,6 +30,8 @@
 ## Хранилище
 
 Путь: `MEDIA_ROOT/<provider>/<brand>/<model>/<car_id>/<NN>.<ext>`
+
+Ресайз `w=320` сохраняется в подпапку кеша: `MEDIA_ROOT/_resized/...`
 
 ## Nginx (prod) пример
 
