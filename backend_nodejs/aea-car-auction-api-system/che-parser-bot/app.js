@@ -99,13 +99,15 @@ class CheParserApp {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 deleted TINYINT(1) DEFAULT 0,
+                deleted_at TIMESTAMP NULL,
                 INDEX idx_marka_model (MARKA_NAME, MODEL_NAME),
                 INDEX idx_price_calc (PRICE_CALC),
                 INDEX idx_calc_rub (CALC_RUB),
                 INDEX idx_calc_updated (CALC_UPDATED_AT),
                 INDEX idx_source (SOURCE),
                 INDEX idx_status (STATUS),
-                INDEX idx_auction_date (AUCTION_DATE)
+                INDEX idx_auction_date (AUCTION_DATE),
+                INDEX idx_deleted_cleanup (deleted, deleted_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         `;
 
@@ -124,11 +126,13 @@ class CheParserApp {
         const columnMigrations = [
             `ALTER TABLE che_available ADD COLUMN AUCTION_DATE DATETIME NULL AFTER SOURCE`,
             `ALTER TABLE che_available ADD COLUMN AUCTION VARCHAR(255) NULL AFTER AUCTION_DATE`,
-            `ALTER TABLE che_available ADD COLUMN LOT VARCHAR(50) NULL AFTER AUCTION`
+            `ALTER TABLE che_available ADD COLUMN LOT VARCHAR(50) NULL AFTER AUCTION`,
+            `ALTER TABLE che_available ADD COLUMN deleted_at TIMESTAMP NULL AFTER deleted`
         ];
 
         const indexMigrations = [
-            `ALTER TABLE che_available ADD INDEX idx_auction_date (AUCTION_DATE)`
+            `ALTER TABLE che_available ADD INDEX idx_auction_date (AUCTION_DATE)`,
+            `ALTER TABLE che_available ADD INDEX idx_deleted_cleanup (deleted, deleted_at)`
         ];
 
         for (const sql of columnMigrations) {

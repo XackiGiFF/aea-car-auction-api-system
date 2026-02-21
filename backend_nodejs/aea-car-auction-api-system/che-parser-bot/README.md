@@ -24,6 +24,10 @@
   - `MEDIA_SERVICE_URL=http://cdn-media-bot:3010`
   - `MEDIA_SERVICE_TOKEN=<shared-secret>`
   - `MEDIA_SERVICE_TIMEOUT_MS=25000`
+- Автоочистка устаревших записей/медиа:
+  - `PURGE_DELETED_ENABLED=true`
+  - `PURGE_DELETED_AFTER_HOURS=48`
+  - `PURGE_DELETED_BATCH_SIZE=5000`
 
 ## Что делает воркер
 
@@ -31,6 +35,7 @@
 - Заполняет `PRIV` (привод), `KPP`/`KPP_TYPE`, `TIME` (топливо), `ENG_V`
 - Может скачивать фото локально и сохранять в БД уже URL вашего CDN
 - Может отправлять исходные URL в `cdn-media-bot`, который скачивает и возвращает локальные CDN-ссылки
+- При полном прогоне помечает пропавшие авто как `deleted=1`, а затем удаляет старые записи и их медиа-папки через `cdn-media-bot`
 
 ## Смежные документы
 
