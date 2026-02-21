@@ -5,6 +5,7 @@
 ## Состав
 
 - `aea-car-auction-api-system/` основной Node.js продукт (API + боты)
+  - включая `cdn-media-bot` для локального mirror изображений
 
 ## Ссылки
 

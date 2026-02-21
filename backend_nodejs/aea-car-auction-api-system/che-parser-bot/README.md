@@ -20,12 +20,17 @@
   - `CHE_MEDIA_DOWNLOAD_ENABLED=true`
   - `CHE_MEDIA_ROOT=/app/media`
   - `CHE_MEDIA_BASE_URL=https://asiaexpressauto.ru/cdn/media`
+- Предпочтительный режим через отдельный сервис:
+  - `MEDIA_SERVICE_URL=http://cdn-media-bot:3010`
+  - `MEDIA_SERVICE_TOKEN=<shared-secret>`
+  - `MEDIA_SERVICE_TIMEOUT_MS=25000`
 
 ## Что делает воркер
 
 - Нормализует `MARKA_NAME`/`MODEL_NAME` в ASCII (без иероглифов, где это возможно)
 - Заполняет `PRIV` (привод), `KPP`/`KPP_TYPE`, `TIME` (топливо), `ENG_V`
 - Может скачивать фото локально и сохранять в БД уже URL вашего CDN
+- Может отправлять исходные URL в `cdn-media-bot`, который скачивает и возвращает локальные CDN-ссылки
 
 ## Смежные документы
 

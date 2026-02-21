@@ -21,6 +21,9 @@ class Che168Parser {
         this.downloadMedia = String(process.env.CHE_MEDIA_DOWNLOAD_ENABLED || 'false').toLowerCase() === 'true';
         this.mediaRoot = process.env.CHE_MEDIA_ROOT || '/app/media';
         this.mediaBaseUrl = (process.env.CHE_MEDIA_BASE_URL || '').replace(/\/+$/, '');
+        this.mediaServiceUrl = (process.env.MEDIA_SERVICE_URL || '').replace(/\/+$/, '');
+        this.mediaServiceToken = process.env.MEDIA_SERVICE_TOKEN || '';
+        this.mediaServiceTimeoutMs = Number(process.env.MEDIA_SERVICE_TIMEOUT_MS || 25000);
 
         // Словарь для перевода китайских марок на английские
         this.brandTranslations = {
@@ -149,7 +152,10 @@ class Che168Parser {
     }
 
     // Генерация ID автомобиля [2]
-    generateCarId(brand, model, year, mileage, price) {
+    generateCarId(apiCar, brand, model, year, mileage, price) {
+        if (apiCar && apiCar.carid) {
+            return `che168_${apiCar.carid}`;
+        }
         const base = `${brand}_${model}_${year}_${mileage}_${price}`;
         const hash = crypto.createHash('md5').update(base).digest('hex');
         return `${hash.substring(0, 12)}`;
@@ -294,6 +300,32 @@ class Che168Parser {
     }
 
     async localizeImages(imageUrls, brand, model, carId) {
+        if (this.mediaServiceUrl && this.mediaServiceToken) {
+            const result = [];
+            for (let i = 0; i < imageUrls.length; i++) {
+                const localized = await this.localizeImageByService({
+                    imageUrl: imageUrls[i],
+                    provider: 'che168',
+                    brand,
+                    model,
+                    carId,
+                    imageIndex: i + 1
+                });
+                if (localized) {
+                    result.push(localized);
+                }
+            }
+
+            if (result.length > 0) {
+                return result;
+            }
+
+            if (!this.downloadMedia || !this.mediaBaseUrl) {
+                this.log('Media service configured, but no images localized. Skipping donor URLs.');
+                return [];
+            }
+        }
+
         if (!this.downloadMedia || !this.mediaBaseUrl) {
             return imageUrls;
         }
@@ -332,6 +364,36 @@ class Che168Parser {
         }
 
         return result.length > 0 ? result : imageUrls;
+    }
+
+    async localizeImageByService({ imageUrl, provider, brand, model, carId, imageIndex }) {
+        try {
+            const response = await axios.post(
+                `${this.mediaServiceUrl}/internal/media/fetch`,
+                {
+                    source_url: imageUrl,
+                    provider,
+                    brand,
+                    model,
+                    car_id: String(carId),
+                    image_index: imageIndex
+                },
+                {
+                    timeout: this.mediaServiceTimeoutMs,
+                    headers: {
+                        'x-media-token': this.mediaServiceToken
+                    }
+                }
+            );
+
+            if (response.data?.ok && response.data?.url) {
+                return response.data.url;
+            }
+            return null;
+        } catch (error) {
+            this.log(`Image service failed for ${imageUrl}: ${error.message}`);
+            return null;
+        }
     }
 
     // Получение списка автомобилей с API [2]
@@ -609,19 +671,24 @@ class Che168Parser {
             details.drive = 'FF';
         }
 
-        // Тип топлива
-        if (bodyText.includes('汽油')) {
-            details.fuelType = 'G';
-            this.log(`Found fuel type: G (petrol)`);
-        } else if (bodyText.includes('柴油')) {
-            details.fuelType = 'D';
-            this.log(`Found fuel type: D (diesel)`);
-        } else if (bodyText.includes('电动') || bodyText.includes('新能源')) {
-            details.fuelType = 'E';
-            this.log(`Found fuel type: E (electric)`);
-        } else if (bodyText.includes('混动') || bodyText.includes('混合动力')) {
+        // Тип топлива (строго по "энергетическим" ключам, чтобы не ловить ложные "电动座椅")
+        const energyBlock = bodyText.match(/(能源类型|燃料类型|动力类型).{0,24}/u)?.[0] || '';
+        const fuelSourceText = `${energyBlock} ${bodyText.substring(0, 4000)}`;
+        if (/插电式混合|增程/u.test(fuelSourceText)) {
+            details.fuelType = 'P';
+            this.log('Found fuel type: P (plug-in hybrid)');
+        } else if (/油电混合|混合动力|双擎/u.test(fuelSourceText)) {
             details.fuelType = 'H';
-            this.log(`Found fuel type: H (hybrid)`);
+            this.log('Found fuel type: H (hybrid)');
+        } else if (/纯电|新能源/u.test(energyBlock)) {
+            details.fuelType = 'E';
+            this.log('Found fuel type: E (electric)');
+        } else if (/柴油/u.test(fuelSourceText)) {
+            details.fuelType = 'D';
+            this.log('Found fuel type: D (diesel)');
+        } else if (/汽油/u.test(fuelSourceText)) {
+            details.fuelType = 'G';
+            this.log('Found fuel type: G (petrol)');
         }
 
         return details;
@@ -636,6 +703,7 @@ class Che168Parser {
 
             // Генерация ID [2]
             const carId = this.generateCarId(
+                apiCar,
                 brandEnglish,
                 modelEnglish,
                 apiCar.registrationdate,

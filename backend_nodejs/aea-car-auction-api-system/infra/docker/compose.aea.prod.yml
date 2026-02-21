@@ -84,14 +84,15 @@ services:
     depends_on:
       api_mariadb_v2:
         condition: service_healthy
+      cdn-media-bot-v2:
+        condition: service_started
     env_file:
       - ../../che-parser-bot/.env
     environment:
       DB_HOST: api_mariadb_v2
       DB_PORT: 3306
       NODE_ENV: production
-    volumes:
-      - che_media_data:/app/media
+      MEDIA_SERVICE_URL: http://cdn-media-bot-v2:3010
     healthcheck:
       test: ["CMD", "pgrep", "-f", "node"]
       interval: 30s
@@ -101,6 +102,29 @@ services:
       aea_network:
         aliases:
           - che-parser-bot-v2
+
+  cdn-media-bot-v2:
+    image: ghcr.io/${GITHUB_ORG}/cdn-media-bot:${CDN_MEDIA_BOT_TAG:-latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-aea_api_system}-cdn-media-bot-v2
+    restart: unless-stopped
+    env_file:
+      - ../../cdn-media-bot/.env
+    expose:
+      - "3010"
+    volumes:
+      - cdn_media_data:/app/media
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3010/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      aea_network:
+        aliases:
+          - cdn-media-bot-v2
+      legacy_site_network:
+        aliases:
+          - cdn-media-bot-v2
 
   # sync-bot:
   #   image: ghcr.io/${GITHUB_ORG}/sync-bot:${SYNC_BOT_TAG:-latest}
@@ -129,4 +153,4 @@ networks:
     external: true
 
 volumes:
-  che_media_data:
+  cdn_media_data:

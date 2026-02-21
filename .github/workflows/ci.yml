@@ -24,6 +24,8 @@ jobs:
             run_tests: true
           - service: che-parser-bot
             run_tests: false
+          - service: cdn-media-bot
+            run_tests: false
 
     defaults:
       run:
@@ -63,6 +65,8 @@ jobs:
             context: backend_nodejs/aea-car-auction-api-system/calc-bot
           - service: che-parser-bot
             context: backend_nodejs/aea-car-auction-api-system/che-parser-bot
+          - service: cdn-media-bot
+            context: backend_nodejs/aea-car-auction-api-system/cdn-media-bot
 
     steps:
       - name: Checkout

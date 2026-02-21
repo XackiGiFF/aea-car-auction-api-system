@@ -81,6 +81,8 @@ services:
     depends_on:
       api_mariadb:
         condition: service_healthy
+      cdn-media-bot:
+        condition: service_started
     volumes:
       - ../../che-parser-bot:/app
       - /app/node_modules
@@ -90,8 +92,33 @@ services:
       DB_HOST: api_mariadb
       DB_PORT: 3306
       NODE_ENV: ${NODE_ENV:-production}
+      MEDIA_SERVICE_URL: http://cdn-media-bot:3010
     healthcheck:
       test: ["CMD", "pgrep", "-f", "node"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aea_network
+
+  cdn-media-bot:
+    build:
+      context: ../../cdn-media-bot
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-simpleweb}-cdn-media-bot
+    restart: unless-stopped
+    volumes:
+      - cdn_media_data:/app/media
+      - ../../cdn-media-bot:/app
+      - /app/node_modules
+    env_file:
+      - ../../cdn-media-bot/.env
+    expose:
+      - "3010"
+    ports:
+      - "${CDN_MEDIA_BOT_PORT:-3010}:3010"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3010/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -123,3 +150,6 @@ services:
   #     retries: 3
   #   networks:
   #     - aea_network
+
+volumes:
+  cdn_media_data:

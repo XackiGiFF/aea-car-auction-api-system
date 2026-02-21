@@ -8,6 +8,7 @@ on:
       - "backend_nodejs/aea-car-auction-api-system/api-gateway/**"
       - "backend_nodejs/aea-car-auction-api-system/calc-bot/**"
       - "backend_nodejs/aea-car-auction-api-system/che-parser-bot/**"
+      - "backend_nodejs/aea-car-auction-api-system/cdn-media-bot/**"
       - "backend_nodejs/aea-car-auction-api-system/infra/docker/**"
   workflow_dispatch:
 
@@ -35,6 +36,9 @@ jobs:
           - service: che-parser-bot
             context: backend_nodejs/aea-car-auction-api-system/che-parser-bot
             image: ghcr.io/${{ github.repository_owner }}/che-parser-bot
+          - service: cdn-media-bot
+            context: backend_nodejs/aea-car-auction-api-system/cdn-media-bot
+            image: ghcr.io/${{ github.repository_owner }}/cdn-media-bot
 
     steps:
       - name: Checkout

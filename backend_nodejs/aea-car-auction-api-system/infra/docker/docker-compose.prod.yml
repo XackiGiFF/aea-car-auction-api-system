@@ -73,14 +73,35 @@ services:
     depends_on:
       api_mariadb:
         condition: service_healthy
+      cdn-media-bot:
+        condition: service_started
     env_file:
       - ../../che-parser-bot/.env
     environment:
       DB_HOST: api_mariadb
       DB_PORT: 3306
       NODE_ENV: production
+      MEDIA_SERVICE_URL: http://cdn-media-bot:3010
     healthcheck:
       test: ["CMD", "pgrep", "-f", "node"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aea_network
+
+  cdn-media-bot:
+    image: ghcr.io/${GITHUB_ORG}/cdn-media-bot:${CDN_MEDIA_BOT_TAG:-latest}
+    container_name: car-auction-cdn-media-bot
+    restart: unless-stopped
+    env_file:
+      - ../../cdn-media-bot/.env
+    expose:
+      - "3010"
+    volumes:
+      - cdn_media_data:/app/media
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3010/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -115,3 +136,4 @@ networks:
 
 volumes:
   api_mariadb_data:
+  cdn_media_data:

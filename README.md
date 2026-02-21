@@ -36,5 +36,6 @@
 - API gateway: `backend_nodejs/aea-car-auction-api-system/api-gateway/README.md`
 - Calc bot: `backend_nodejs/aea-car-auction-api-system/calc-bot/README.md`
 - Che parser bot: `backend_nodejs/aea-car-auction-api-system/che-parser-bot/README.md`
+- CDN media bot: `backend_nodejs/aea-car-auction-api-system/cdn-media-bot/README.md`
 - Docker orchestration: `backend_nodejs/aea-car-auction-api-system/infra/docker/README.md`
 - WordPress theme: `wp_sources_php/wp_theme/README.md`
