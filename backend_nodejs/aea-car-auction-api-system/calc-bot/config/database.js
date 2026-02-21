@@ -3,109 +3,138 @@ require('dotenv').config();
 
 class Database {
     constructor() {
+        const intEnv = (name, fallback) => {
+            const value = parseInt(process.env[name], 10);
+            return Number.isFinite(value) ? value : fallback;
+        };
+
         this.config = {
             host: process.env.DB_HOST,
             user: process.env.DB_USER,
             password: process.env.DB_PASSWORD,
             database: process.env.DB_NAME,
             charset: 'utf8mb4',
-            connectionLimit: 10, // Уменьшаем до разумного значения
-            acquireTimeout: 60000,
-            timeout: 60000,
+            connectionLimit: intEnv('DB_POOL_SIZE', 10),
+            maxIdle: intEnv('DB_POOL_MAX_IDLE', 10),
+            idleTimeout: intEnv('DB_POOL_IDLE_TIMEOUT_MS', 60000),
             waitForConnections: true,
-            queueLimit: 1000,
-            reconnect: true,
-            // Важные настройки для стабильности
+            queueLimit: intEnv('DB_POOL_QUEUE_LIMIT', 0),
             enableKeepAlive: true,
-            keepAliveInitialDelay: 10000,
-            // Увеличиваем таймауты
-            connectTimeout: 10000,
+            keepAliveInitialDelay: intEnv('DB_POOL_KEEPALIVE_DELAY_MS', 0),
+            connectTimeout: intEnv('DB_CONNECT_TIMEOUT_MS', 10000),
+            decimalNumbers: true,
         };
 
         this.pool = null;
-        this.retryCount = 0;
-        this.maxRetries = 5;
+        this.initPromise = null;
+        this.maxRetries = intEnv('DB_CONNECT_RETRIES', 5);
+        this.queryRetryLimit = intEnv('DB_QUERY_RETRIES', 1);
+        this.retryableErrorCodes = new Set([
+            'PROTOCOL_CONNECTION_LOST',
+            'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
+            'ECONNREFUSED',
+            'ECONNRESET',
+            'ETIMEDOUT',
+            'EPIPE'
+        ]);
     }
 
     async init() {
-        try {
-            console.log('🔌 Creating database pool...');
-            this.pool = mysql.createPool(this.config);
+        if (this.pool) return this.pool;
 
-            // Тестируем соединение
-            const connection = await this.pool.getConnection();
-            await connection.execute('SELECT 1');
-            connection.release();
+        if (this.initPromise) {
+            return this.initPromise;
+        }
 
-            console.log('✅ Database pool created successfully');
-            return this.pool;
-        } catch (error) {
-            console.error('❌ Database pool creation failed:', error.message);
+        this.initPromise = this._initWithRetry()
+            .finally(() => {
+                this.initPromise = null;
+            });
 
-            if (this.retryCount < this.maxRetries) {
-                this.retryCount++;
-                console.log(`🔄 Retrying database connection (attempt ${this.retryCount}/${this.maxRetries})...`);
-                await new Promise(resolve => setTimeout(resolve, 2000));
-                return this.init();
+        return this.initPromise;
+    }
+
+    async _initWithRetry() {
+        for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+            let candidatePool = null;
+            let connection = null;
+            try {
+                console.log(`🔌 Creating database pool (attempt ${attempt}/${this.maxRetries})...`);
+                candidatePool = mysql.createPool(this.config);
+                connection = await candidatePool.getConnection();
+                await connection.ping();
+                connection.release();
+                this.pool = candidatePool;
+                console.log('✅ Database pool created successfully');
+                return this.pool;
+            } catch (error) {
+                if (connection) {
+                    try { connection.release(); } catch (_) {}
+                }
+                if (candidatePool) {
+                    try { await candidatePool.end(); } catch (_) {}
+                }
+
+                console.error('❌ Database pool creation failed:', error.message);
+
+                if (attempt === this.maxRetries) {
+                    throw error;
+                }
+
+                const delayMs = Math.min(1000 * attempt, 5000);
+                await new Promise(resolve => setTimeout(resolve, delayMs));
             }
-
-            throw error;
         }
     }
 
     async getConnection() {
-        if (!this.pool) {
-            await this.init();
-        }
+        const pool = await this.init();
 
         try {
-            return await this.pool.getConnection();
+            return await pool.getConnection();
         } catch (error) {
             console.error('❌ Failed to get database connection:', error.message);
             throw error;
         }
     }
 
-    async query(sql, params = []) {
-        let connection;
+    _isRetryableError(error) {
+        return !!(error && this.retryableErrorCodes.has(error.code));
+    }
+
+    async resetPool() {
+        if (!this.pool) return;
+
+        const oldPool = this.pool;
+        this.pool = null;
         try {
-            connection = await this.getConnection();
-            const [rows] = await connection.execute(sql, params);
+            await oldPool.end();
+        } catch (error) {
+            console.error('Error while resetting pool:', error.message);
+        }
+    }
+
+    async query(sql, params = [], attempt = 0) {
+        try {
+            const pool = await this.init();
+            const [rows] = await pool.execute(sql, params);
             return rows;
         } catch (error) {
             console.error('Database query error:', error.message);
 
-            // Переподключаемся при ошибках соединения
-            if (error.code === 'PROTOCOL_CONNECTION_LOST' ||
-                error.code === 'ECONNREFUSED' ||
-                error.code === 'ETIMEDOUT') {
-                console.log('🔄 Reconnecting to database...');
-                this.pool = null;
-                await this.init();
-                return this.query(sql, params);
+            if (this._isRetryableError(error) && attempt < this.queryRetryLimit) {
+                console.log(`🔄 Reconnecting to database and retrying query (${attempt + 1}/${this.queryRetryLimit})...`);
+                await this.resetPool();
+                return this.query(sql, params, attempt + 1);
             }
 
             throw error;
-        } finally {
-            if (connection) {
-                try {
-                    connection.release();
-                } catch (releaseError) {
-                    console.error('Error releasing connection:', releaseError.message);
-                }
-            }
         }
     }
 
     async close() {
-        if (this.pool) {
-            try {
-                await this.pool.end();
-                console.log('🔌 Database connection closed');
-            } catch (error) {
-                console.error('Error closing pool:', error.message);
-            }
-        }
+        await this.resetPool();
+        console.log('🔌 Database connection closed');
     }
 
     // Метод для массовой вставки/обновления
