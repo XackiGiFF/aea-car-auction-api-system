@@ -154,7 +154,10 @@ class Che168Parser {
     // Генерация ID автомобиля [2]
     generateCarId(apiCar, brand, model, year, mileage, price) {
         if (apiCar && apiCar.carid) {
-            return `che168_${apiCar.carid}`;
+            const normalized = String(apiCar.carid).replace(/[^a-zA-Z0-9]/g, '');
+            if (normalized.length > 0) {
+                return normalized;
+            }
         }
         const base = `${brand}_${model}_${year}_${mileage}_${price}`;
         const hash = crypto.createHash('md5').update(base).digest('hex');
