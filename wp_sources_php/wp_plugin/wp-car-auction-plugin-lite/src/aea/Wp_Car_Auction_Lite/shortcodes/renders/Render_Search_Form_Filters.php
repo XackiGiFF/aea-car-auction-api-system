@@ -23,6 +23,43 @@ class Render_Search_Form_Filters {
     }
 
     /**
+     * Возвращает параметры кнопки переключения между рынками China <-> Che Available.
+     */
+    private function get_market_switch_link(string $market): ?array
+    {
+        $switch_map = array(
+            'china' => array(
+                'target_slug' => 'che_available',
+                'label' => 'Смотреть авто в наличии',
+            ),
+            'che_available' => array(
+                'target_slug' => 'china',
+                'label' => 'Смотреть авто под заказ',
+            ),
+        );
+
+        if (!isset($switch_map[$market])) {
+            return null;
+        }
+
+        $target_slug = $switch_map[$market]['target_slug'];
+        $target_url = home_url('/' . $target_slug . '/');
+
+        $target_page = get_page_by_path($target_slug);
+        if ($target_page instanceof \WP_Post) {
+            $resolved_url = get_permalink($target_page);
+            if (!empty($resolved_url)) {
+                $target_url = $resolved_url;
+            }
+        }
+
+        return array(
+            'url' => $target_url,
+            'label' => $switch_map[$market]['label'],
+        );
+    }
+
+    /**
      * Generate search form HTML
      */
     public function render_search_form($market = 'main', $filters = array()): bool|string {
@@ -33,6 +70,7 @@ class Render_Search_Form_Filters {
         $fuel_types = $filters_data['fuel_types'] ?? [];
         $transmissions = $filters_data['transmissions'] ?? [];
         $drives = $filters_data['drives'] ?? [];
+        $switch_link = $this->get_market_switch_link((string)$market);
         $market_labels = array(
                 'main' => 'Подбор автомобиля из Японии',
                 'korea' => 'Подбор автомобиля из Кореи',
@@ -45,6 +83,13 @@ class Render_Search_Form_Filters {
         <div class="fliter-wrapper">
             <div class="h2-wrapper">
                 <h1 class="h2 mid"><?php echo esc_html($market_labels[$market] ?? __('Car Search', 'car-auction')); ?></h1>
+                <?php if (!empty($switch_link)): ?>
+                    <div class="button-switch-wrapper">
+                        <a href="<?php echo esc_url($switch_link['url']); ?>" class="button-red switch w-button">
+                            <?php echo esc_html($switch_link['label']); ?>
+                        </a>
+                    </div>
+                <?php endif; ?>
             </div>
             <div class="all-filter">
                 <div class="w-form">

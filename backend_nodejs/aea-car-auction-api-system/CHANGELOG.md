@@ -25,3 +25,19 @@
 ### CI/CD
 - `deploy-prod` собирает и публикует `cdn-media-bot` в GHCR вместе с `api-gateway`, `calc-bot`, `che-parser-bot`.
 - Прод-стек в `compose.aea.prod.yml` запускает `cdn-media-bot-v2` и `che-parser-bot-v2` с `MEDIA_SERVICE_URL`.
+
+### API Gateway / CHE-168
+- Исправлены динамические фильтры для `provider=che-168`:
+  - `fuel_types` теперь возвращается списком с `code/name/count`;
+  - `transmissions` и `drives` возвращаются групповыми объектами с `count`;
+  - добавлен `table_support` для корректного отображения фильтров на фронте.
+- Исправлена фильтрация `/api/cars` для `che-168`:
+  - корректная обработка `mileage_from/mileage_to` (числовое сравнение);
+  - добавлены фильтры по `transmission_group`/`transmission`, `drive_group`/`drive`, `fuel_group`/`fuel_type`.
+- Провайдер `Che168Provider` синхронизирован по полям `TIME`, `KPP`, `PRIV`, чтобы фильтры и выдача работали так же стабильно, как для AJES.
+
+### WP Plugin
+- В рендер формы добавлена кнопка-переключатель между рынками `china` и `che_available`:
+  - `china` -> `Смотреть авто в наличии`;
+  - `che_available` -> `Смотреть авто под заказ`.
+- Кнопка рендерится только для этих двух рынков и использует существующие классы верстки (`button-switch-wrapper`, `button-red switch w-button`) без добавления новых CSS в плагин.
