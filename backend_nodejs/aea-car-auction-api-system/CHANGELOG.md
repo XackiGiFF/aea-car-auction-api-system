@@ -14,6 +14,10 @@
 
 ### Media / CDN
 - Подтвержден поток для `che-parser-bot -> cdn-media-bot` с заменой donor URL на локальные ссылки `/cdn/media/...`.
+- Добавлена обработка ширины `w=320` для выдачи изображений CDN:
+  - поддержка `?w=320`
+  - поддержка legacy URL формата `.../file.webp&w=320`
+  - для любых других `w` отдается исходный файл без ресайза.
 
 ### Docker / Runtime
 - Во все Node-образы (`api-gateway`, `calc-bot`, `che-parser-bot`, `cdn-media-bot`) добавлен `curl` для healthcheck и диагностики.
