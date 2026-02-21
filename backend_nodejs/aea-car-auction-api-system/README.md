@@ -4,6 +4,7 @@
 - `api-gateway`
 - `calc-bot`
 - `che-parser-bot`
+- `cdn-media-bot`
 - `sync-bot` (временно отключен)
 
 ## Принцип запуска
@@ -15,9 +16,11 @@
 
 ## Навигация по подсистемам
 
+- Changelog: `backend_nodejs/aea-car-auction-api-system/CHANGELOG.md`
 - API gateway: `backend_nodejs/aea-car-auction-api-system/api-gateway/README.md`
 - Calc bot: `backend_nodejs/aea-car-auction-api-system/calc-bot/README.md`
 - Che parser bot: `backend_nodejs/aea-car-auction-api-system/che-parser-bot/README.md`
+- CDN media bot: `backend_nodejs/aea-car-auction-api-system/cdn-media-bot/README.md`
 - Infrastructure: `backend_nodejs/aea-car-auction-api-system/infra/README.md`
 - Docker orchestration: `backend_nodejs/aea-car-auction-api-system/infra/docker/README.md`
 - Scripts: `backend_nodejs/aea-car-auction-api-system/scripts/README.md`
@@ -40,6 +43,7 @@ cp infra/docker/.env.example infra/docker/.env
 - `api-gateway/.env`
 - `calc-bot/.env`
 - `che-parser-bot/.env`
+- `cdn-media-bot/.env`
 3. Запуск dev:
 ```bash
 make dev-up

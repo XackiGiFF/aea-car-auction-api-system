@@ -1,0 +1,19 @@
+{
+  "name": "aea-cdn-media-bot",
+  "version": "1.0.0",
+  "description": "Internal media fetcher/proxy for car images",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js"
+  },
+  "dependencies": {
+    "axios": "^1.13.2",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "helmet": "^7.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}

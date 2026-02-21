@@ -2,6 +2,8 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const puppeteer = require('puppeteer');
 const crypto = require('crypto');
+const fs = require('fs/promises');
+const path = require('path');
 require('dotenv').config();
 
 class Che168Parser {
@@ -16,6 +18,12 @@ class Che168Parser {
         this.maxPages = 0;
         this.maxParallelRequests = 1;
         this.isRunning = false;
+        this.downloadMedia = String(process.env.CHE_MEDIA_DOWNLOAD_ENABLED || 'false').toLowerCase() === 'true';
+        this.mediaRoot = process.env.CHE_MEDIA_ROOT || '/app/media';
+        this.mediaBaseUrl = (process.env.CHE_MEDIA_BASE_URL || '').replace(/\/+$/, '');
+        this.mediaServiceUrl = (process.env.MEDIA_SERVICE_URL || '').replace(/\/+$/, '');
+        this.mediaServiceToken = process.env.MEDIA_SERVICE_TOKEN || '';
+        this.mediaServiceTimeoutMs = Number(process.env.MEDIA_SERVICE_TIMEOUT_MS || 25000);
 
         // Словарь для перевода китайских марок на английские
         this.brandTranslations = {
@@ -39,7 +47,10 @@ class Che168Parser {
             '特斯拉': 'TESLA',
             '福特': 'FORD',
             '雪佛兰': 'CHEVROLET',
-            '别克': 'BUICK'
+            '别克': 'BUICK',
+            '雷克萨斯': 'LEXUS',
+            '长安启源': 'CHANGAN QIYUAN',
+            '领克': 'LYNK&CO'
         };
 
         // Словарь для перевода моделей
@@ -58,7 +69,14 @@ class Che168Parser {
             '帕萨特': 'PASSAT',
             '朗逸': 'LAVIDA',
             '速腾': 'SAGITAR',
-            '昂克赛拉': 'AXELA'
+            '昂克赛拉': 'AXELA',
+            '探岳': 'TAYRON',
+            '森林人': 'FORESTER',
+            '明锐': 'OCTAVIA',
+            '雷克萨斯NX': 'NX',
+            '缤智': 'VEZEL',
+            '凌渡': 'LAMANDO',
+            '雷凌': 'LEVIN'
         };
 
         // Маппинг цветов
@@ -116,6 +134,11 @@ class Che168Parser {
             '后驱': 'RWD',
             '四驱': 'AWD'
         };
+
+        this.defaultImageBlacklist = [
+            'default-che168.png',
+            '/2scimg/m/'
+        ];
     }
 
     // Логирование в консоль [2]
@@ -129,10 +152,248 @@ class Che168Parser {
     }
 
     // Генерация ID автомобиля [2]
-    generateCarId(brand, model, year, mileage, price) {
+    generateCarId(apiCar, brand, model, year, mileage, price) {
+        if (apiCar && apiCar.carid) {
+            return `che168_${apiCar.carid}`;
+        }
         const base = `${brand}_${model}_${year}_${mileage}_${price}`;
         const hash = crypto.createHash('md5').update(base).digest('hex');
         return `${hash.substring(0, 12)}`;
+    }
+
+    containsNonAscii(value) {
+        return /[^\x20-\x7E]/.test(value || '');
+    }
+
+    slugify(value) {
+        return (value || '')
+            .toString()
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '') || 'unknown';
+    }
+
+    escapeRegex(value) {
+        return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    normalizeBrand(apiCar) {
+        const brandRaw = (apiCar.BrandName || '').trim();
+        if (!brandRaw) {
+            return apiCar.Brandid ? `BRAND_${apiCar.Brandid}` : 'UNKNOWN';
+        }
+
+        if (this.brandTranslations[brandRaw]) {
+            return this.brandTranslations[brandRaw];
+        }
+
+        if (!this.containsNonAscii(brandRaw)) {
+            return brandRaw.toUpperCase();
+        }
+
+        return apiCar.Brandid ? `BRAND_${apiCar.Brandid}` : 'UNKNOWN';
+    }
+
+    normalizeModel(apiCar, normalizedBrand) {
+        const seriesName = (apiCar.SeriesName || '').trim();
+        const carName = (apiCar.carname || '').trim();
+        const specName = (apiCar.SpecName || '').trim();
+
+        const raw = seriesName || carName || specName;
+        if (!raw) {
+            return apiCar.Seriesid ? `SERIES_${apiCar.Seriesid}` : 'MODEL_UNKNOWN';
+        }
+
+        for (const [cn, en] of Object.entries(this.modelTranslations)) {
+            if (raw.includes(cn) || carName.includes(cn) || seriesName.includes(cn)) {
+                return en.toUpperCase();
+            }
+        }
+
+        let cleaned = raw
+            .replace(/\s+\d{4}款.*$/u, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (normalizedBrand) {
+            cleaned = cleaned.replace(new RegExp(`^${this.escapeRegex(normalizedBrand)}\\s*`, 'i'), '');
+        }
+        const brandRaw = (apiCar.BrandName || '').trim();
+        if (brandRaw) {
+            cleaned = cleaned.replace(new RegExp(`^${this.escapeRegex(brandRaw)}\\s*`, 'u'), '');
+        }
+
+        const modelCodeMatch = cleaned.match(/[A-Za-z][A-Za-z0-9\-+]{0,20}/g);
+        if (modelCodeMatch && modelCodeMatch.length > 0) {
+            return modelCodeMatch[0].toUpperCase();
+        }
+
+        if (!this.containsNonAscii(cleaned)) {
+            return cleaned.toUpperCase() || (apiCar.Seriesid ? `SERIES_${apiCar.Seriesid}` : 'MODEL_UNKNOWN');
+        }
+
+        return apiCar.Seriesid ? `SERIES_${apiCar.Seriesid}` : 'MODEL_UNKNOWN';
+    }
+
+    inferTransmission(apiCar, puppeteerDetails) {
+        const text = `${apiCar.carname || ''} ${apiCar.SpecName || ''}`.toUpperCase();
+
+        if (puppeteerDetails.transmission) {
+            return puppeteerDetails.transmission;
+        }
+        if (text.includes('CVT')) return 'CVT';
+        if (text.includes('MT') || /手动/u.test(apiCar.carname || '') || /手动/u.test(apiCar.SpecName || '')) return 'MT';
+        if (text.includes('DCT') || text.includes('DSG') || text.includes('PDK')) return 'AT';
+        if (text.includes('AT') || /自动/u.test(apiCar.carname || '') || /自动/u.test(apiCar.SpecName || '')) return 'AT';
+        return 'AT';
+    }
+
+    inferFuelType(apiCar, puppeteerDetails) {
+        const text = `${apiCar.carname || ''} ${apiCar.SpecName || ''}`.toUpperCase();
+        const textCn = `${apiCar.carname || ''} ${apiCar.SpecName || ''}`;
+
+        if (puppeteerDetails.fuelType) {
+            return puppeteerDetails.fuelType;
+        }
+        if (/柴油/u.test(textCn) || /\bTDI\b/.test(text)) return 'D';
+        if (/插电|增程/u.test(textCn) || /\bPHEV\b/.test(text)) return 'P';
+        if (/混动|双擎|混合动力/u.test(textCn) || /\bHEV\b|\bHYBRID\b/.test(text)) return 'H';
+        if (/纯电|电动/u.test(textCn) || /\bEV\b/.test(text)) return 'E';
+        return 'G';
+    }
+
+    inferDrive(apiCar, puppeteerDetails) {
+        const text = `${apiCar.carname || ''} ${apiCar.SpecName || ''}`.toUpperCase();
+        const textCn = `${apiCar.carname || ''} ${apiCar.SpecName || ''}`;
+
+        if (puppeteerDetails.drive) {
+            return puppeteerDetails.drive;
+        }
+        if (/四驱/u.test(textCn) || /\b4WD\b|\bAWD\b|\bXDRIVE\b|\bQUATTRO\b/.test(text)) return '4WD';
+        if (/后驱/u.test(textCn) || /\bRWD\b|\bFR\b/.test(text)) return 'FR';
+        if (/前驱|两驱/u.test(textCn) || /\bFWD\b|\bFF\b/.test(text)) return 'FF';
+        return 'FF';
+    }
+
+    extractEngineCc(apiCar, puppeteerDetails) {
+        if (puppeteerDetails.engineVolume) {
+            return String(puppeteerDetails.engineVolume);
+        }
+        const text = `${apiCar.carname || ''} ${apiCar.SpecName || ''}`;
+        const m = text.match(/(\d\.\d)\s*L/i);
+        if (m) {
+            return String(Math.round(parseFloat(m[1]) * 1000));
+        }
+        return '';
+    }
+
+    normalizeImageList(rawImages) {
+        const list = (rawImages || '')
+            .split('#')
+            .map((u) => (u || '').trim())
+            .filter(Boolean)
+            .filter((u) => /^https?:\/\//i.test(u))
+            .filter((u) => !this.defaultImageBlacklist.some((bad) => u.includes(bad)));
+
+        return [...new Set(list)];
+    }
+
+    async localizeImages(imageUrls, brand, model, carId) {
+        if (this.mediaServiceUrl && this.mediaServiceToken) {
+            const result = [];
+            for (let i = 0; i < imageUrls.length; i++) {
+                const localized = await this.localizeImageByService({
+                    imageUrl: imageUrls[i],
+                    provider: 'che168',
+                    brand,
+                    model,
+                    carId,
+                    imageIndex: i + 1
+                });
+                if (localized) {
+                    result.push(localized);
+                }
+            }
+
+            if (result.length > 0) {
+                return result;
+            }
+
+            if (!this.downloadMedia || !this.mediaBaseUrl) {
+                this.log('Media service configured, but no images localized. Skipping donor URLs.');
+                return [];
+            }
+        }
+
+        if (!this.downloadMedia || !this.mediaBaseUrl) {
+            return imageUrls;
+        }
+
+        const brandSlug = this.slugify(brand);
+        const modelSlug = this.slugify(model);
+        const baseDir = path.join(this.mediaRoot, 'che168', brandSlug, modelSlug, String(carId));
+        await fs.mkdir(baseDir, { recursive: true });
+
+        const result = [];
+        for (let i = 0; i < imageUrls.length; i++) {
+            const url = imageUrls[i];
+            try {
+                const response = await axios.get(url, {
+                    timeout: 20000,
+                    responseType: 'arraybuffer',
+                    headers: {
+                        'User-Agent': this.userAgent,
+                        'Referer': 'https://www.che168.com/'
+                    }
+                });
+
+                const contentType = (response.headers['content-type'] || '').toLowerCase();
+                let ext = '.jpg';
+                if (contentType.includes('webp') || url.includes('.webp')) ext = '.webp';
+                else if (contentType.includes('png') || url.includes('.png')) ext = '.png';
+                else if (contentType.includes('jpeg') || url.includes('.jpeg')) ext = '.jpeg';
+
+                const fileName = `${String(i + 1).padStart(2, '0')}${ext}`;
+                const filePath = path.join(baseDir, fileName);
+                await fs.writeFile(filePath, response.data);
+                result.push(`${this.mediaBaseUrl}/che168/${brandSlug}/${modelSlug}/${carId}/${fileName}`);
+            } catch (error) {
+                this.log(`Image localization failed for ${url}: ${error.message}`);
+            }
+        }
+
+        return result.length > 0 ? result : imageUrls;
+    }
+
+    async localizeImageByService({ imageUrl, provider, brand, model, carId, imageIndex }) {
+        try {
+            const response = await axios.post(
+                `${this.mediaServiceUrl}/internal/media/fetch`,
+                {
+                    source_url: imageUrl,
+                    provider,
+                    brand,
+                    model,
+                    car_id: String(carId),
+                    image_index: imageIndex
+                },
+                {
+                    timeout: this.mediaServiceTimeoutMs,
+                    headers: {
+                        'x-media-token': this.mediaServiceToken
+                    }
+                }
+            );
+
+            if (response.data?.ok && response.data?.url) {
+                return response.data.url;
+            }
+            return null;
+        } catch (error) {
+            this.log(`Image service failed for ${imageUrl}: ${error.message}`);
+            return null;
+        }
     }
 
     // Получение списка автомобилей с API [2]
@@ -383,10 +644,10 @@ class Che168Parser {
         }
 
         // Объем двигателя
-        const engineMatch = bodyText.match(/2\.0L/);
+        const engineMatch = bodyText.match(/(\d\.\d)\s*L/i);
         if (engineMatch) {
-            details.engineVolume = 2000;
-            this.log(`Found engine volume: 2.0L = 2000 cc`);
+            details.engineVolume = Math.round(parseFloat(engineMatch[1]) * 1000);
+            this.log(`Found engine volume: ${engineMatch[1]}L = ${details.engineVolume} cc`);
         }
 
         // Трансмиссия [1]
@@ -401,19 +662,33 @@ class Che168Parser {
             this.log(`Found transmission: CVT`);
         }
 
-        // Тип топлива
-        if (bodyText.includes('汽油')) {
-            details.fuelType = 'G';
-            this.log(`Found fuel type: G (petrol)`);
-        } else if (bodyText.includes('柴油')) {
-            details.fuelType = 'D';
-            this.log(`Found fuel type: D (diesel)`);
-        } else if (bodyText.includes('电动') || bodyText.includes('新能源')) {
-            details.fuelType = 'E';
-            this.log(`Found fuel type: E (electric)`);
-        } else if (bodyText.includes('混动') || bodyText.includes('混合动力')) {
+        // Привод
+        if (bodyText.includes('四驱') || bodyText.includes('4WD') || bodyText.includes('AWD')) {
+            details.drive = '4WD';
+        } else if (bodyText.includes('后驱') || bodyText.includes('RWD') || bodyText.includes('FR')) {
+            details.drive = 'FR';
+        } else if (bodyText.includes('前驱') || bodyText.includes('两驱') || bodyText.includes('FWD') || bodyText.includes('FF')) {
+            details.drive = 'FF';
+        }
+
+        // Тип топлива (строго по "энергетическим" ключам, чтобы не ловить ложные "电动座椅")
+        const energyBlock = bodyText.match(/(能源类型|燃料类型|动力类型).{0,24}/u)?.[0] || '';
+        const fuelSourceText = `${energyBlock} ${bodyText.substring(0, 4000)}`;
+        if (/插电式混合|增程/u.test(fuelSourceText)) {
+            details.fuelType = 'P';
+            this.log('Found fuel type: P (plug-in hybrid)');
+        } else if (/油电混合|混合动力|双擎/u.test(fuelSourceText)) {
             details.fuelType = 'H';
-            this.log(`Found fuel type: H (hybrid)`);
+            this.log('Found fuel type: H (hybrid)');
+        } else if (/纯电|新能源/u.test(energyBlock)) {
+            details.fuelType = 'E';
+            this.log('Found fuel type: E (electric)');
+        } else if (/柴油/u.test(fuelSourceText)) {
+            details.fuelType = 'D';
+            this.log('Found fuel type: D (diesel)');
+        } else if (/汽油/u.test(fuelSourceText)) {
+            details.fuelType = 'G';
+            this.log('Found fuel type: G (petrol)');
         }
 
         return details;
@@ -422,21 +697,13 @@ class Che168Parser {
     // Преобразование данных автомобиля в формат для базы данных
     async prepareCarData(apiCar, puppeteerDetails) {
         try {
-            // Применяем переводы
-            const brandChinese = apiCar.BrandName || '';
-            const brandEnglish = this.brandTranslations[brandChinese] || brandChinese;
-
-            const modelChinese = apiCar.carname || '';
-            let modelEnglish = modelChinese;
-            for (const [chinese, english] of Object.entries(this.modelTranslations)) {
-                if (modelChinese.includes(chinese)) {
-                    modelEnglish = english;
-                    break;
-                }
-            }
+            // Применяем нормализацию бренда/модели без иероглифов.
+            const brandEnglish = this.normalizeBrand(apiCar);
+            const modelEnglish = this.normalizeModel(apiCar, brandEnglish);
 
             // Генерация ID [2]
             const carId = this.generateCarId(
+                apiCar,
                 brandEnglish,
                 modelEnglish,
                 apiCar.registrationdate,
@@ -444,17 +711,13 @@ class Che168Parser {
                 apiCar.price
             );
 
-            // Маппинг типа топлива [2]
-            let fuelType = 'G'; // По умолчанию бензин
-            if (puppeteerDetails.fuelType) {
-                fuelType = puppeteerDetails.fuelType;
-            }
-
-            // Маппинг трансмиссии [2]
-            let transmission = 'AT'; // По умолчанию автоматическая
-            if (puppeteerDetails.transmission) {
-                transmission = puppeteerDetails.transmission;
-            }
+            const fuelType = this.inferFuelType(apiCar, puppeteerDetails);
+            const transmission = this.inferTransmission(apiCar, puppeteerDetails);
+            const drive = this.inferDrive(apiCar, puppeteerDetails);
+            const engineCc = this.extractEngineCc(apiCar, puppeteerDetails);
+            const imageList = this.normalizeImageList(puppeteerDetails.images || apiCar.image || '');
+            const localizedImages = await this.localizeImages(imageList, brandEnglish, modelEnglish, carId);
+            const basePrice = puppeteerDetails.price ? puppeteerDetails.price : (parseFloat(apiCar.price) * 10000);
 
             // Формируем данные в формате CarModel [2]
             const carData = {
@@ -466,29 +729,29 @@ class Che168Parser {
                 MODEL_NAME: modelEnglish,
                 YEAR: puppeteerDetails.year || apiCar.registrationdate || '',
                 TOWN: apiCar.cname || '',
-                ENG_V: puppeteerDetails.engineVolume ? puppeteerDetails.engineVolume.toString() : '',
+                ENG_V: engineCc,
                 PW: puppeteerDetails.horsepower ? puppeteerDetails.horsepower.toString() : '',
                 KUZOV: '',
                 GRADE: '',
                 COLOR: puppeteerDetails.color_en || puppeteerDetails.color || '',
                 KPP: transmission,
                 KPP_TYPE: transmission,
-                PRIV: '',
+                PRIV: drive,
                 MILEAGE: puppeteerDetails.mileage ? puppeteerDetails.mileage.toString() : (parseFloat(apiCar.mileage) * 10000).toString(),
                 EQUIP: '',
                 RATE: '',
-                START: puppeteerDetails.price ? puppeteerDetails.price.toString() : (parseFloat(apiCar.price) * 10000).toString(),
-                FINISH: puppeteerDetails.price ? puppeteerDetails.price.toString() : (parseFloat(apiCar.price) * 10000).toString(),
+                START: basePrice.toString(),
+                FINISH: basePrice.toString(),
                 STATUS: 'available',
                 TIME: fuelType,
                 SANCTION: '',
-                AVG_PRICE: puppeteerDetails.price ? puppeteerDetails.price.toString() : (parseFloat(apiCar.price) * 10000).toString(),
+                AVG_PRICE: basePrice.toString(),
                 AVG_STRING: '',
-                IMAGES: puppeteerDetails.images || '',
+                IMAGES: localizedImages.join('#'),
                 PRICE_CALC: null,
                 CALC_RUB: null,
                 CALC_UPDATED_AT: null,
-                original_price: puppeteerDetails.price || parseFloat(apiCar.price) * 10000,
+                original_price: basePrice,
                 original_currency: 'CNY',
                 converted_price: null,
                 tks_total: null,
