@@ -290,12 +290,132 @@ class Che168Parser {
         if (puppeteerDetails.engineVolume) {
             return String(puppeteerDetails.engineVolume);
         }
+        if (puppeteerDetails.fuelType === 'E') {
+            return '';
+        }
         const text = `${apiCar.carname || ''} ${apiCar.SpecName || ''}`;
         const m = text.match(/(\d\.\d)\s*L/i);
         if (m) {
             return String(Math.round(parseFloat(m[1]) * 1000));
         }
         return '';
+    }
+
+    normalizeLabelText(value) {
+        return String(value || '')
+            .replace(/[\u00A0\s]+/g, '')
+            .trim();
+    }
+
+    extractHorsepowerFromText(value) {
+        const match = String(value || '').match(/(\d{2,4})\s*马力/u);
+        if (!match) return null;
+        const hp = parseInt(match[1], 10);
+        if (!Number.isFinite(hp) || hp < 20 || hp > 2500) return null;
+        return hp;
+    }
+
+    extractEngineVolumeCcFromText(value) {
+        const normalized = String(value || '');
+        const patterns = [
+            /排量[^0-9]{0,8}(\d+(?:\.\d+)?)\s*[TL]/iu,
+            /挡位\s*\/\s*排量[^0-9]{0,16}(?:自动|手动|CVT|AT|MT)?\s*\/\s*(\d+(?:\.\d+)?)\s*L/iu,
+            /发动机[^0-9]{0,8}(\d+(?:\.\d+)?)\s*[TL]/iu,
+            /(\d+(?:\.\d+)?)\s*L/iu,
+            /(\d+(?:\.\d+)?)\s*T/iu
+        ];
+
+        for (const pattern of patterns) {
+            const match = normalized.match(pattern);
+            if (!match) continue;
+            const liters = parseFloat(match[1]);
+            if (!Number.isFinite(liters)) continue;
+            if (liters < 0.6 || liters > 8.5) continue;
+            return Math.round(liters * 1000);
+        }
+
+        return null;
+    }
+
+    extractMileageKmFromText(value) {
+        const normalized = String(value || '');
+        const wanMatch = normalized.match(/(\d+(?:\.\d+)?)\s*万公里/iu);
+        if (wanMatch) {
+            const mileage = parseFloat(wanMatch[1]) * 10000;
+            return Number.isFinite(mileage) ? Math.round(mileage) : null;
+        }
+
+        const kmMatch = normalized.match(/(\d+(?:\.\d+)?)\s*公里/iu);
+        if (kmMatch) {
+            const mileage = parseFloat(kmMatch[1]);
+            return Number.isFinite(mileage) ? Math.round(mileage) : null;
+        }
+
+        return null;
+    }
+
+    extractMileageKmFromApi(apiCar) {
+        const raw = apiCar?.mileage;
+        if (raw === undefined || raw === null || raw === '') {
+            return '';
+        }
+
+        const text = String(raw).trim();
+        if (!text) return '';
+
+        const byText = this.extractMileageKmFromText(text);
+        if (Number.isFinite(byText)) {
+            return byText;
+        }
+
+        const numeric = parseFloat(text.replace(/,/g, ''));
+        if (!Number.isFinite(numeric) || numeric < 0) {
+            return '';
+        }
+
+        if (text.includes('.')) {
+            return Math.round(numeric * 10000);
+        }
+
+        if (numeric <= 20) {
+            return Math.round(numeric * 10000);
+        }
+
+        return Math.round(numeric);
+    }
+
+    extractYearFromText(value) {
+        const match = String(value || '').match(/(20\d{2}|19\d{2})年/u);
+        if (!match) return null;
+        const year = parseInt(match[1], 10);
+        return Number.isFinite(year) ? year : null;
+    }
+
+    parseStructuredFields($) {
+        const fields = [];
+
+        $('ul.brand-unit-item.fn-clear li').each((_, liElement) => {
+            const label = this.normalizeLabelText($(liElement).find('p').text());
+            const value = $(liElement).find('h4').text().replace(/\s+/g, ' ').trim();
+            if (label && value) {
+                fields.push({ label, value });
+            }
+        });
+
+        $('ul.basic-item-ul li').each((_, liElement) => {
+            const labelRaw = $(liElement).find('span.item-name').first().text();
+            const label = this.normalizeLabelText(labelRaw);
+            if (!label) return;
+
+            const valueNode = $(liElement).clone();
+            valueNode.find('span.item-name').remove();
+            const value = valueNode.text().replace(/\s+/g, ' ').trim();
+            if (!value || value === '-') return;
+
+            fields.push({ label, value });
+        });
+
+        return fields;
     }
 
     normalizeImageList(rawImages) {
@@ -709,74 +829,180 @@ class Che168Parser {
             this.log(`Final price: ${priceMatch[1]}万 = ${details.price} CNY`);
         }
 
-        // Пробег [1]
-        const mileageMatch = bodyText.match(/(\d+\.?\d*)万公里/);
-        if (mileageMatch) {
-            details.mileage = parseFloat(mileageMatch[1]) * 10000;
-            this.log(`Found mileage: ${mileageMatch[1]}万公里 = ${details.mileage} km`);
+        const structuredFields = this.parseStructuredFields($);
+        for (const field of structuredFields) {
+            const label = field.label;
+            const value = field.value;
+
+            if ((label.includes('表显里程') || label === '里程') && !details.mileage) {
+                const mileage = this.extractMileageKmFromText(value);
+                if (Number.isFinite(mileage)) {
+                    details.mileage = mileage;
+                    this.log(`Found mileage from ${label}: ${value} -> ${mileage} km`);
+                }
+            }
+
+            if ((label.includes('上牌时间') || label.includes('登记时间')) && !details.year) {
+                const year = this.extractYearFromText(value);
+                if (year) {
+                    details.year = year;
+                    this.log(`Found year from ${label}: ${year}`);
+                }
+            }
+
+            if ((label.includes('排量') || label.includes('挡位/排量') || label.includes('发动机')) && !details.engineVolume) {
+                const cc = this.extractEngineVolumeCcFromText(`${label} ${value}`);
+                if (Number.isFinite(cc)) {
+                    details.engineVolume = cc;
+                    this.log(`Found engine volume from ${label}: ${value} -> ${cc} cc`);
+                }
+            }
+
+            if ((label.includes('发动机') || label.includes('电动机')) && !details.horsepower) {
+                const hp = this.extractHorsepowerFromText(value);
+                if (Number.isFinite(hp)) {
+                    details.horsepower = hp;
+                    this.log(`Found horsepower from ${label}: ${hp}`);
+                }
+            }
+
+            if ((label.includes('变速箱') || label.includes('挡位')) && !details.transmission) {
+                if (/CVT/i.test(value)) details.transmission = 'CVT';
+                else if (/手动|MT/i.test(value)) details.transmission = 'MT';
+                else if (/自动|AT|DCT|DSG|PDK/i.test(value)) details.transmission = 'AT';
+            }
+
+            if ((label.includes('驱动方式') || label === '驱动') && !details.drive) {
+                if (/四驱|4WD|AWD/u.test(value)) details.drive = '4WD';
+                else if (/后驱|RWD|FR/u.test(value)) details.drive = 'FR';
+                else if (/前驱|两驱|FWD|FF/u.test(value)) details.drive = 'FF';
+            }
+
+            if ((label.includes('燃油标号') || label.includes('燃油类型') || label.includes('能源类型')) && !details.fuelType) {
+                if (/插电|增程|PHEV/u.test(value)) details.fuelType = 'P';
+                else if (/混动|双擎|混合动力|HEV|HYBRID/u.test(value)) details.fuelType = 'H';
+                else if (/纯电|电动|EV/u.test(value)) details.fuelType = 'E';
+                else if (/柴油/u.test(value)) details.fuelType = 'D';
+                else if (/汽油|92号|95号|98号/u.test(value)) details.fuelType = 'G';
+            }
+
+            if ((label.includes('车身颜色') || label === '颜色') && !details.color) {
+                const colorMatch = value.match(/(白色|黑色|银色|灰色|蓝色|红色|棕色|金色|绿色|黄色)/u);
+                if (colorMatch) {
+                    details.color = colorMatch[1];
+                    details.color_en = this.colorTranslations[colorMatch[1]] || colorMatch[1];
+                }
+            }
+
+            if (label.includes('标准容量') && !details.batteryKwh) {
+                const batteryMatch = value.match(/(\d+(?:\.\d+)?)\s*kwh/i);
+                if (batteryMatch) {
+                    details.batteryKwh = parseFloat(batteryMatch[1]);
+                    details.fuelType = details.fuelType || 'E';
+                    this.log(`Found battery capacity from ${label}: ${details.batteryKwh} kWh`);
+                }
+            }
         }
 
-        // Год [1]
-        const yearMatch = bodyText.match(/(202\d|201\d)年/);
-        if (yearMatch) {
-            details.year = parseInt(yearMatch[1]);
-            this.log(`Found year: ${details.year}`);
+        if (!details.horsepower) {
+            const horsepowerMatch = bodyText.match(/(\d{2,4})\s*马力/u);
+            if (horsepowerMatch) {
+                details.horsepower = parseInt(horsepowerMatch[1], 10);
+                this.log(`Found horsepower: ${details.horsepower}`);
+            }
         }
 
-        // Цвет
-        const colorMatch = bodyText.match(/(白色|黑色|银色|灰色|蓝色|红色|棕色|金色|绿色|黄色)/);
-        if (colorMatch) {
-            details.color = colorMatch[1];
-            details.color_en = this.colorTranslations[colorMatch[1]] || colorMatch[1];
-            this.log(`Found color: ${details.color} (${details.color_en})`);
+        if (!details.mileage) {
+            const mileageMatch = bodyText.match(/表显里程[\s:：]*([0-9]+(?:\.[0-9]+)?)\s*万公里/u)
+                || bodyText.match(/([0-9]+(?:\.[0-9]+)?)\s*万公里/u);
+            if (mileageMatch) {
+                details.mileage = Math.round(parseFloat(mileageMatch[1]) * 10000);
+                this.log(`Found mileage fallback: ${mileageMatch[1]}万公里 = ${details.mileage} km`);
+            }
         }
 
-        // Объем двигателя
-        const engineMatch = bodyText.match(/(\d\.\d)\s*L/i);
-        if (engineMatch) {
-            details.engineVolume = Math.round(parseFloat(engineMatch[1]) * 1000);
-            this.log(`Found engine volume: ${engineMatch[1]}L = ${details.engineVolume} cc`);
+        if (!details.year) {
+            const yearMatch = bodyText.match(/上牌时间[\s:：]*(20\d{2}|19\d{2})年/u) || bodyText.match(/(20\d{2}|19\d{2})年/u);
+            if (yearMatch) {
+                details.year = parseInt(yearMatch[1], 10);
+                this.log(`Found year: ${details.year}`);
+            }
         }
 
-        // Трансмиссия [1]
-        if (bodyText.includes('自动')) {
-            details.transmission = 'AT';
-            this.log(`Found transmission: AT`);
-        } else if (bodyText.includes('手动')) {
-            details.transmission = 'MT';
-            this.log(`Found transmission: MT`);
-        } else if (bodyText.includes('CVT')) {
-            details.transmission = 'CVT';
-            this.log(`Found transmission: CVT`);
+        if (!details.color) {
+            const colorMatch = bodyText.match(/(白色|黑色|银色|灰色|蓝色|红色|棕色|金色|绿色|黄色)/u);
+            if (colorMatch) {
+                details.color = colorMatch[1];
+                details.color_en = this.colorTranslations[colorMatch[1]] || colorMatch[1];
+                this.log(`Found color: ${details.color} (${details.color_en})`);
+            }
         }
 
-        // Привод
-        if (bodyText.includes('四驱') || bodyText.includes('4WD') || bodyText.includes('AWD')) {
-            details.drive = '4WD';
-        } else if (bodyText.includes('后驱') || bodyText.includes('RWD') || bodyText.includes('FR')) {
-            details.drive = 'FR';
-        } else if (bodyText.includes('前驱') || bodyText.includes('两驱') || bodyText.includes('FWD') || bodyText.includes('FF')) {
-            details.drive = 'FF';
+        if (!details.engineVolume) {
+            const engineContextMatch =
+                bodyText.match(/挡位\s*\/\s*排量[\s\S]{0,24}?(\d+(?:\.\d+)?)\s*L/u)
+                || bodyText.match(/排量[\s:：]*([0-9]+(?:\.[0-9]+)?)\s*L/u)
+                || bodyText.match(/发动机[\s:：]*([0-9]+(?:\.[0-9]+)?)\s*[TL]/u);
+            if (engineContextMatch) {
+                const liters = parseFloat(engineContextMatch[1]);
+                if (Number.isFinite(liters) && liters >= 0.6 && liters <= 8.5) {
+                    details.engineVolume = Math.round(liters * 1000);
+                    this.log(`Found engine volume fallback: ${liters}L = ${details.engineVolume} cc`);
+                }
+            }
         }
 
-        // Тип топлива (строго по "энергетическим" ключам, чтобы не ловить ложные "电动座椅")
-        const energyBlock = bodyText.match(/(能源类型|燃料类型|动力类型).{0,24}/u)?.[0] || '';
-        const fuelSourceText = `${energyBlock} ${bodyText.substring(0, 4000)}`;
-        if (/插电式混合|增程/u.test(fuelSourceText)) {
-            details.fuelType = 'P';
-            this.log('Found fuel type: P (plug-in hybrid)');
-        } else if (/油电混合|混合动力|双擎/u.test(fuelSourceText)) {
-            details.fuelType = 'H';
-            this.log('Found fuel type: H (hybrid)');
-        } else if (/纯电|新能源/u.test(energyBlock)) {
-            details.fuelType = 'E';
-            this.log('Found fuel type: E (electric)');
-        } else if (/柴油/u.test(fuelSourceText)) {
-            details.fuelType = 'D';
-            this.log('Found fuel type: D (diesel)');
-        } else if (/汽油/u.test(fuelSourceText)) {
-            details.fuelType = 'G';
-            this.log('Found fuel type: G (petrol)');
+        if (!details.transmission) {
+            if (bodyText.includes('CVT')) {
+                details.transmission = 'CVT';
+                this.log('Found transmission: CVT');
+            } else if (bodyText.includes('自动')) {
+                details.transmission = 'AT';
+                this.log('Found transmission: AT');
+            } else if (bodyText.includes('手动')) {
+                details.transmission = 'MT';
+                this.log('Found transmission: MT');
+            }
+        }
+
+        if (!details.drive) {
+            if (bodyText.includes('四驱') || bodyText.includes('4WD') || bodyText.includes('AWD')) {
+                details.drive = '4WD';
+            } else if (bodyText.includes('后驱') || bodyText.includes('RWD') || bodyText.includes('FR')) {
+                details.drive = 'FR';
+            } else if (bodyText.includes('前驱') || bodyText.includes('两驱') || bodyText.includes('FWD') || bodyText.includes('FF')) {
+                details.drive = 'FF';
+            }
+        }
+
+        if (!details.fuelType) {
+            const energyBlock = bodyText.match(/(能源类型|燃料类型|动力类型).{0,24}/u)?.[0] || '';
+            const fuelSourceText = `${energyBlock} ${bodyText.substring(0, 4000)}`;
+            if (/插电式混合|增程/u.test(fuelSourceText)) {
+                details.fuelType = 'P';
+                this.log('Found fuel type: P (plug-in hybrid)');
+            } else if (/油电混合|混合动力|双擎/u.test(fuelSourceText)) {
+                details.fuelType = 'H';
+                this.log('Found fuel type: H (hybrid)');
+            } else if (/纯电|新能源|电动|标准容量/u.test(fuelSourceText)) {
+                details.fuelType = 'E';
+                this.log('Found fuel type: E (electric)');
+            } else if (/柴油/u.test(fuelSourceText)) {
+                details.fuelType = 'D';
+                this.log('Found fuel type: D (diesel)');
+            } else if (/汽油|92号|95号|98号/u.test(fuelSourceText)) {
+                details.fuelType = 'G';
+                this.log('Found fuel type: G (petrol)');
+            }
+        }
+
+        if (!details.batteryKwh) {
+            const batteryMatch = bodyText.match(/标准容量[\s:：]*([0-9]+(?:\.[0-9]+)?)\s*kwh/i);
+            if (batteryMatch) {
+                details.batteryKwh = parseFloat(batteryMatch[1]);
+                details.fuelType = details.fuelType || 'E';
+                this.log(`Found battery capacity fallback: ${details.batteryKwh} kWh`);
+            }
         }
 
         return details;
@@ -806,6 +1032,9 @@ class Che168Parser {
             const imageList = this.normalizeImageList(puppeteerDetails.images || apiCar.image || '');
             const localizedImages = await this.localizeImages(imageList, brandEnglish, modelEnglish, carId);
             const basePrice = puppeteerDetails.price ? puppeteerDetails.price : (parseFloat(apiCar.price) * 10000);
+            const mileageKm = Number.isFinite(Number(puppeteerDetails.mileage))
+                ? Math.round(Number(puppeteerDetails.mileage))
+                : this.extractMileageKmFromApi(apiCar);
 
             // Формируем данные в формате CarModel [2]
             const carData = {
@@ -825,7 +1054,7 @@ class Che168Parser {
                 KPP: transmission,
                 KPP_TYPE: transmission,
                 PRIV: drive,
-                MILEAGE: puppeteerDetails.mileage ? puppeteerDetails.mileage.toString() : (parseFloat(apiCar.mileage) * 10000).toString(),
+                MILEAGE: mileageKm !== '' ? String(mileageKm) : '',
                 EQUIP: '',
                 RATE: '',
                 START: basePrice.toString(),
