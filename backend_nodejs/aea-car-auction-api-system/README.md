@@ -16,6 +16,7 @@
 
 ## Навигация по подсистемам
 
+- Changelog: `backend_nodejs/aea-car-auction-api-system/CHANGELOG.md`
 - API gateway: `backend_nodejs/aea-car-auction-api-system/api-gateway/README.md`
 - Calc bot: `backend_nodejs/aea-car-auction-api-system/calc-bot/README.md`
 - Che parser bot: `backend_nodejs/aea-car-auction-api-system/che-parser-bot/README.md`

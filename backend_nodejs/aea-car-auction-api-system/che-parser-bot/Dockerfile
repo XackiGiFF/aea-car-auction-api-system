@@ -3,6 +3,7 @@ FROM node:20-slim
 # Установка системных зависимостей для Puppeteer (Debian/Ubuntu)
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    curl \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \

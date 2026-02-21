@@ -422,8 +422,7 @@ class Car_Auction_Search {
 
                         // Create WordPress post if enabled
                         if (get_option('car_auction_create_wp_posts', 'no') === 'yes') {
-                            // Schedule post creation
-                            wp_schedule_single_event(time() + 30, 'car_auction_create_wp_post', array($car_id, $market));
+                            $this->enqueue_post_creation($car_id, $market, 30);
                         }
                     }
                 } else {
@@ -455,7 +454,7 @@ class Car_Auction_Search {
                 if ($index_result) {
                     // Schedule WordPress post creation if enabled
                     if (get_option('car_auction_create_wp_posts', 'no') === 'yes') {
-                        wp_schedule_single_event(time() + 30, 'car_auction_create_wp_post', array($car_id, $market));
+                        $this->enqueue_post_creation($car_id, $market, 30);
                     }
                 }
             } else {
@@ -464,7 +463,7 @@ class Car_Auction_Search {
 
                 // Schedule WordPress post creation if enabled
                 if (get_option('car_auction_create_wp_posts', 'no') === 'yes') {
-                    wp_schedule_single_event(time() + 30, 'car_auction_create_wp_post', array($car_id, $market));
+                    $this->enqueue_post_creation($car_id, $market, 30);
                 }
             }
         }
@@ -480,12 +479,16 @@ class Car_Auction_Search {
             'meta_key' => '_car_auction_id',
             'meta_value' => $car_id,
             'post_status' => 'any',
-            'numberposts' => 1
+            'numberposts' => 1,
+            'fields' => 'ids',
+            'no_found_rows' => true,
+            'cache_results' => false,
+            'update_post_meta_cache' => false,
+            'update_post_term_cache' => false
         ));
 
         if (empty($existing_post)) {
-            // Schedule post creation
-            wp_schedule_single_event(time() + 30, 'car_auction_create_wp_post', array($car_id, $market));
+            $this->enqueue_post_creation($car_id, $market, 30);
 
             // Если WP-Cron отключен, попробуем создать пост немедленно (фолбэк)
             if (defined('DISABLE_WP_CRON') && DISABLE_WP_CRON === true) {
@@ -503,6 +506,32 @@ class Car_Auction_Search {
                     }
                 }
             }
+        }
+    }
+
+    private function enqueue_post_creation(string $car_id, string $market, int $delay_seconds = 30): void
+    {
+        global $wpdb;
+
+        $queue_table = $wpdb->prefix . 'car_auction_post_queue';
+        $scheduled_at = date('Y-m-d H:i:s', current_time('timestamp') + max(0, $delay_seconds));
+        $created_at = current_time('mysql');
+
+        $wpdb->query($wpdb->prepare(
+            "INSERT INTO {$queue_table} (car_id, market, status, scheduled_at, created_at, attempts)
+             VALUES (%s, %s, 'pending', %s, %s, 0)
+             ON DUPLICATE KEY UPDATE
+                status = IF(status = 'completed', status, 'pending'),
+                scheduled_at = IF(status = 'completed', scheduled_at, VALUES(scheduled_at)),
+                error_message = NULL",
+            $car_id,
+            $market,
+            $scheduled_at,
+            $created_at
+        ));
+
+        if (!wp_next_scheduled('car_auction_create_wp_post', array($car_id, $market))) {
+            wp_schedule_single_event(time() + max(5, $delay_seconds), 'car_auction_create_wp_post', array($car_id, $market));
         }
     }
 
