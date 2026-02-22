@@ -283,14 +283,14 @@ class Render_Detail_Page {
                                     <?php endif; ?>
                                 </div>
                                 <div class="price-car-wrapper">
-                                    <div class="one-char-left m-16-400 gray">Стоимость</div>
-                                    <div class="one-char-right m-16-400">
-                                        <?php
-                                        $initial_calc_price = '';
-                                        if (isset($car['calc_rub']) && is_numeric($car['calc_rub']) && (float)$car['calc_rub'] > 0) {
-                                            $initial_calc_price = number_format((float)$car['calc_rub'], 0, '.', ' ') . ' ₽';
-                                        }
-                                        ?>
+                                    <div class="m-16-400 gray">Стоимость</div>
+                                    <?php
+                                    $initial_calc_price = '';
+                                    if (isset($car['calc_rub']) && is_numeric($car['calc_rub']) && (float)$car['calc_rub'] > 0) {
+                                        $initial_calc_price = number_format((float)$car['calc_rub'], 0, '.', ' ') . ' ₽';
+                                    }
+                                    ?>
+                                    <div class="m-32-600">
                                         <span
                                             id="car-price-value"
                                             class="car-price-loading"
