@@ -27,6 +27,32 @@ class Che168Parser {
         this.purgeDeletedEnabled = String(process.env.PURGE_DELETED_ENABLED || 'true').toLowerCase() === 'true';
         this.purgeDeletedAfterHours = Number(process.env.PURGE_DELETED_AFTER_HOURS || 48);
         this.purgeDeletedBatchSize = Number(process.env.PURGE_DELETED_BATCH_SIZE || 5000);
+        this.puppeteerMaxAttempts = Math.max(1, Number(process.env.CHE_PUPPETEER_MAX_ATTEMPTS || 3));
+        this.puppeteerRetryDelayMs = Math.max(1000, Number(process.env.CHE_PUPPETEER_RETRY_DELAY_MS || 5000));
+        this.puppeteerRetryMaxDelayMs = Math.max(
+            this.puppeteerRetryDelayMs,
+            Number(process.env.CHE_PUPPETEER_RETRY_MAX_DELAY_MS || 30000)
+        );
+        this.puppeteerNavTimeoutMs = Math.max(30000, Number(process.env.CHE_PUPPETEER_NAV_TIMEOUT_MS || 60000));
+        this.deepseekApiUrl = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/chat/completions';
+        this.deepseekApiKey = process.env.DEEPSEEK_API_KEY || '';
+        const deepseekEnabledEnv = String(process.env.DEEPSEEK_ENABLED || '').trim().toLowerCase();
+        this.deepseekEnabled = deepseekEnabledEnv ? deepseekEnabledEnv === 'true' : Boolean(this.deepseekApiKey);
+        this.deepseekModel = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
+        this.deepseekTimeoutMs = Math.max(3000, Number(process.env.DEEPSEEK_TIMEOUT_MS || 12000));
+        this.deepseekMaxRetries = Math.max(1, Number(process.env.DEEPSEEK_MAX_RETRIES || 2));
+        this.deepseekRetryDelayMs = Math.max(500, Number(process.env.DEEPSEEK_RETRY_DELAY_MS || 1500));
+        this.deepseekTranslationCache = new Map();
+        this.deepseekSystemPrompt = [
+            'You are an automotive name translator.',
+            'Translate exactly one car brand or model name into English.',
+            'Output ONLY the translated name.',
+            'No explanations, no extra words, no punctuation, no quotes.',
+            'Use uppercase Latin letters.',
+            'Preserve standard automotive formatting when known (e.g., XR-V, CX-5, X-TRAIL, QASHQAI).',
+            'If input is already English, return normalized uppercase.',
+            'If exact English equivalent is unknown, return pinyin transliteration in uppercase.'
+        ].join(' ');
 
         // Словарь для перевода китайских марок на английские
         this.brandTranslations = {
@@ -56,29 +82,172 @@ class Che168Parser {
             '领克': 'LYNK&CO'
         };
 
+        // Fallback по slug из breadcrumbs (например /anshan/richan/xiaoke/)
+        this.brandSlugTranslations = {
+            'fengtian': 'TOYOTA',
+            'bentian': 'HONDA',
+            'mazida': 'MAZDA',
+            'aodi': 'AUDI',
+            'dazhong': 'VOLKSWAGEN',
+            'baoma': 'BMW',
+            'benchi': 'MERCEDES',
+            'riben': 'NISSAN',
+            'richan': 'NISSAN',
+            'sikeda': 'SKODA',
+            'hafu': 'HAVAL',
+            'xiandai': 'HYUNDAI',
+            'beijingxiandai': 'HYUNDAI',
+            'qiya': 'KIA',
+            'jili': 'GEELY',
+            'jiliqiche': 'GEELY',
+            'changan': 'CHANGAN',
+            'changanqiyuan': 'CHANGAN QIYUAN',
+            'qirui': 'CHERY',
+            'sibalu': 'SUBARU',
+            'fute': 'FORD',
+            'xuefulan': 'CHEVROLET',
+            'bieke': 'BUICK',
+            'leikesasi': 'LEXUS',
+            'tesila': 'TESLA',
+            'biyadi': 'BYD'
+        };
+
         // Словарь для перевода моделей
         this.modelTranslations = {
             'CX-30': 'CX-30',
             'CX-5': 'CX-5',
             'XR-V': 'XR-V',
             'A3': 'A3',
+            '奥迪A3': 'A3',
+            '奥迪Q2L': 'Q2L',
+            '奥迪Q3': 'Q3',
+            '宝马X1': 'X1',
+            '宝马1系': '1 SERIES',
+            '宝马3系': '3 SERIES',
+            '本田XR-V': 'XR-V',
             'T-ROC探歌': 'T-ROC',
+            '高尔夫': 'GOLF',
+            '探影': 'TACQUA',
             '雷凌': 'LEVIN',
             '卡罗拉': 'COROLLA',
+            'YARiS L 致炫': 'YARIS L',
             '雅阁': 'ACCORD',
             '思域': 'CIVIC',
             'CR-V': 'CR-V',
             '途观': 'TIGUAN',
+            '途岳': 'THARU',
             '帕萨特': 'PASSAT',
             '朗逸': 'LAVIDA',
             '速腾': 'SAGITAR',
+            '探歌': 'T-ROC',
             '昂克赛拉': 'AXELA',
+            '马自达3 昂克赛拉': 'AXELA',
+            '马自达CX-5': 'CX-5',
+            '马自达CX-30': 'CX-30',
             '探岳': 'TAYRON',
             '森林人': 'FORESTER',
             '明锐': 'OCTAVIA',
+            '柯米克': 'KAMIQ',
+            '柯珞克': 'KAROQ',
             '雷克萨斯NX': 'NX',
+            '哈弗M6': 'M6',
+            '哈弗H6': 'H6',
             '缤智': 'VEZEL',
-            '凌渡': 'LAMANDO'
+            '凌渡': 'LAMANDO',
+            '缤越': 'COOLRAY',
+            '奕跑': 'STONIC',
+            '伊兰特': 'ELANTRA',
+            '北京现代ix25': 'IX25',
+            '起亚K3': 'K3',
+            'KX3傲跑': 'KX3',
+            '飞度': 'FIT',
+            '逍客': 'QASHQAI',
+            '奇骏': 'X-TRAIL',
+            '轩逸': 'SYLPHY',
+            '天籁': 'TEANA',
+            '迈腾': 'MAGOTAN',
+            '宝来': 'BORA',
+            '雅力士': 'YARIS',
+            '奔驰A级': 'A-CLASS',
+            '瑞虎3x': 'TIGGO 3X',
+            '长安CS35PLUS': 'CS35 PLUS',
+            '长安启源A06': 'A06'
+        };
+
+        // Fallback для model slug из breadcrumbs
+        this.modelSlugTranslations = {
+            'aodia3': 'A3',
+            'aodiq2l': 'Q2L',
+            'aodiq3': 'Q3',
+            'baoma1xi': '1 SERIES',
+            'baoma3xi': '3 SERIES',
+            'baomax1': 'X1',
+            'bentianxrv': 'XR-V',
+            'troctange': 'T-ROC',
+            'leikesasinx': 'NX',
+            'mazida3angkesaila': 'AXELA',
+            'mazidacx5': 'CX-5',
+            'mazidacx30': 'CX-30',
+            'hafum6': 'M6',
+            'hafuh6': 'H6',
+            'xiaoke': 'QASHQAI',
+            'qijun': 'X-TRAIL',
+            'xuanyi': 'SYLPHY',
+            'tianlai': 'TEANA',
+            'leiling': 'LEVIN',
+            'kaluola': 'COROLLA',
+            'langyi': 'LAVIDA',
+            'gaoerfu': 'GOLF',
+            'tuyue': 'THARU',
+            'yilante': 'ELANTRA',
+            'ix25': 'IX25',
+            'beijingxiandaiix25': 'IX25',
+            'sagitar': 'SAGITAR',
+            'lingdu': 'LAMANDO',
+            'mingrui': 'OCTAVIA',
+            'binzhi': 'VEZEL',
+            'binyue': 'COOLRAY',
+            'yipao': 'STONIC',
+            'maiteng': 'MAGOTAN',
+            'bora': 'BORA',
+            'tuguan': 'TIGUAN',
+            'tanyue': 'TAYRON',
+            'tanying': 'TACQUA',
+            'kemike': 'KAMIQ',
+            'keluoke': 'KAROQ',
+            'ruihu3x': 'TIGGO 3X',
+            'changancs35plus': 'CS35 PLUS',
+            'changanqiyuana06': 'A06',
+            'qiyak3': 'K3',
+            'kx3aopao': 'KX3',
+            'feidu': 'FIT',
+            'siyu': 'CIVIC',
+            'yarislzhixuan': 'YARIS L',
+            'yarisl': 'YARIS L',
+            'civic': 'CIVIC',
+            'accord': 'ACCORD',
+            'camry': 'CAMRY',
+            'cr-v': 'CR-V',
+            'xrv': 'XR-V',
+            'x1': 'X1',
+            'q2l': 'Q2L',
+            'q3': 'Q3',
+            'cx5': 'CX-5',
+            'cx30': 'CX-30',
+            'cx-5': 'CX-5',
+            'cx-30': 'CX-30',
+            'vezel': 'VEZEL'
+        };
+
+        // Нормативный словарь: brand slug -> BRAND + вложенные model slugs.
+        this.brandAndModels = this.buildBrandAndModelsConfig();
+        this.brandSlugTranslations = {
+            ...this.brandSlugTranslations,
+            ...this.buildBrandMapFromBrandAndModels(this.brandAndModels)
+        };
+        this.modelSlugTranslations = {
+            ...this.modelSlugTranslations,
+            ...this.buildModelMapFromBrandAndModels(this.brandAndModels)
         };
 
         // Маппинг цветов
@@ -153,6 +322,335 @@ class Che168Parser {
         }
     }
 
+    sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    isRetryablePuppeteerError(errorMessage) {
+        const message = String(errorMessage || '');
+        return /ERR_CONNECTION_CLOSED|ERR_CONNECTION_RESET|ERR_TIMED_OUT|ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED|Navigation timeout|Target closed|Protocol error|Security verification blocked|Insufficient parsed details|Execution context was destroyed/i.test(message);
+    }
+
+    getRetryDelayMs(attemptNumber) {
+        const exponent = Math.max(0, Number(attemptNumber || 1) - 1);
+        const delay = this.puppeteerRetryDelayMs * Math.pow(2, exponent);
+        return Math.min(delay, this.puppeteerRetryMaxDelayMs);
+    }
+
+    hasSufficientParsedDetails(details = {}) {
+        const signals = [
+            'price',
+            'mileage',
+            'year',
+            'engineVolume',
+            'horsepower',
+            'transmission',
+            'drive',
+            'fuelType',
+            'batteryKwh'
+        ];
+        return signals.some((field) => details[field] !== undefined && details[field] !== null && details[field] !== '');
+    }
+
+    buildBrandAndModelsConfig() {
+        return {
+            aodi: {
+                brand: 'AUDI',
+                aliases: ['audi'],
+                models: {
+                    aodia3: 'A3',
+                    aodiq2l: 'Q2L',
+                    aodiq3: 'Q3'
+                }
+            },
+            bentian: {
+                brand: 'HONDA',
+                aliases: ['honda'],
+                models: {
+                    bentianxrv: 'XR-V',
+                    binzhi: 'VEZEL',
+                    siyu: 'CIVIC',
+                    feidu: 'FIT'
+                }
+            },
+            mazida: {
+                brand: 'MAZDA',
+                aliases: ['mazda'],
+                models: {
+                    mazida3angkesaila: 'AXELA',
+                    mazidacx5: 'CX-5',
+                    mazidacx30: 'CX-30'
+                }
+            },
+            dazhong: {
+                brand: 'VOLKSWAGEN',
+                aliases: ['volkswagen', 'vw'],
+                models: {
+                    troctange: 'T-ROC',
+                    gaoerfu: 'GOLF',
+                    tanying: 'TACQUA',
+                    tanyue: 'TAYRON',
+                    tuyue: 'THARU',
+                    tuguan: 'TIGUAN',
+                    lingdu: 'LAMANDO',
+                    sagitar: 'SAGITAR',
+                    bora: 'BORA',
+                    langyi: 'LAVIDA',
+                    maiteng: 'MAGOTAN'
+                }
+            },
+            baoma: {
+                brand: 'BMW',
+                aliases: ['bmw'],
+                models: {
+                    baomax1: 'X1',
+                    baoma1xi: '1 SERIES',
+                    baoma3xi: '3 SERIES'
+                }
+            },
+            sikeda: {
+                brand: 'SKODA',
+                aliases: ['skoda'],
+                models: {
+                    mingrui: 'OCTAVIA',
+                    kemike: 'KAMIQ',
+                    keluoke: 'KAROQ'
+                }
+            },
+            richan: {
+                brand: 'NISSAN',
+                aliases: ['riben', 'nissan'],
+                models: {
+                    xiaoke: 'QASHQAI',
+                    qijun: 'X-TRAIL',
+                    xuanyi: 'SYLPHY',
+                    tianlai: 'TEANA'
+                }
+            },
+            fengtian: {
+                brand: 'TOYOTA',
+                aliases: ['toyota'],
+                models: {
+                    kaluola: 'COROLLA',
+                    leiling: 'LEVIN',
+                    yarisl: 'YARIS L',
+                    yarislzhixuan: 'YARIS L'
+                }
+            },
+            leikesasi: {
+                brand: 'LEXUS',
+                aliases: ['lexus'],
+                models: {
+                    leikesasinx: 'NX'
+                }
+            },
+            xiandai: {
+                brand: 'HYUNDAI',
+                aliases: ['hyundai', 'beijingxiandai'],
+                models: {
+                    yilante: 'ELANTRA',
+                    ix25: 'IX25',
+                    beijingxiandaiix25: 'IX25'
+                }
+            },
+            qiya: {
+                brand: 'KIA',
+                aliases: ['kia'],
+                models: {
+                    qiyak3: 'K3',
+                    kx3aopao: 'KX3',
+                    yipao: 'STONIC'
+                }
+            },
+            hafu: {
+                brand: 'HAVAL',
+                aliases: ['haval'],
+                models: {
+                    hafum6: 'M6',
+                    hafuh6: 'H6'
+                }
+            },
+            jiliqiche: {
+                brand: 'GEELY',
+                aliases: ['jili', 'geely'],
+                models: {
+                    binyue: 'COOLRAY'
+                }
+            },
+            changan: {
+                brand: 'CHANGAN',
+                aliases: ['changan'],
+                models: {
+                    changancs35plus: 'CS35 PLUS'
+                }
+            },
+            changanqiyuan: {
+                brand: 'CHANGAN QIYUAN',
+                aliases: ['qiyuan'],
+                models: {
+                    changanqiyuana06: 'A06'
+                }
+            },
+            qirui: {
+                brand: 'CHERY',
+                aliases: ['chery'],
+                models: {
+                    ruihu3x: 'TIGGO 3X'
+                }
+            },
+            sibalu: {
+                brand: 'SUBARU',
+                aliases: ['subaru'],
+                models: {}
+            },
+            benchi: {
+                brand: 'MERCEDES',
+                aliases: ['benz', 'mercedes'],
+                models: {}
+            }
+        };
+    }
+
+    buildBrandMapFromBrandAndModels(config = {}) {
+        const map = {};
+        for (const [brandSlug, brandConfig] of Object.entries(config || {})) {
+            const brand = String(brandConfig?.brand || '').trim().toUpperCase();
+            if (!brand) continue;
+
+            map[String(brandSlug).toLowerCase()] = brand;
+            const aliases = Array.isArray(brandConfig.aliases) ? brandConfig.aliases : [];
+            for (const alias of aliases) {
+                const normalizedAlias = String(alias || '').trim().toLowerCase();
+                if (normalizedAlias) {
+                    map[normalizedAlias] = brand;
+                }
+            }
+        }
+        return map;
+    }
+
+    buildModelMapFromBrandAndModels(config = {}) {
+        const map = {};
+        for (const brandConfig of Object.values(config || {})) {
+            const models = brandConfig?.models || {};
+            for (const [modelSlug, modelName] of Object.entries(models)) {
+                const slug = String(modelSlug || '').trim().toLowerCase();
+                const name = String(modelName || '').trim().toUpperCase();
+                if (slug && name) {
+                    map[slug] = name;
+                }
+            }
+        }
+        return map;
+    }
+
+    shouldUseDeepSeek() {
+        return Boolean(this.deepseekEnabled && this.deepseekApiKey);
+    }
+
+    normalizeDeepSeekOutput(value, options = {}) {
+        const lines = String(value || '')
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+        if (lines.length === 0) return '';
+
+        let text = lines[0];
+        text = text
+            .replace(/^translation\s*[:：-]\s*/i, '')
+            .replace(/^brand\s*[:：-]\s*/i, '')
+            .replace(/^model\s*[:：-]\s*/i, '')
+            .replace(/^['"`]+|['"`]+$/g, '')
+            .trim();
+
+        if (!text) return '';
+
+        const fragments = text.match(/[A-Za-z0-9][A-Za-z0-9&+\-/ ]{1,60}/g);
+        if (fragments && fragments.length > 0) {
+            text = fragments[fragments.length - 1].trim();
+        }
+
+        text = text.toUpperCase().replace(/\s+/g, ' ').trim();
+
+        if (options.kind === 'model' && options.brandHint) {
+            const brandHint = String(options.brandHint)
+                .toUpperCase()
+                .replace(/[^A-Z0-9&+\-/ ]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (brandHint && text.startsWith(`${brandHint} `)) {
+                text = text.slice(brandHint.length).trim();
+            }
+        }
+
+        if (!text || text.length > 40) return '';
+        if (/[^A-Z0-9&+\-/ ]/.test(text)) return '';
+        if (!/[A-Z]/.test(text)) return '';
+
+        return text;
+    }
+
+    buildDeepSeekUserPrompt(sourceText, options = {}) {
+        const kind = options.kind === 'brand' ? 'brand' : 'model';
+        const lines = [`Input ${kind} name: ${String(sourceText || '').trim()}`];
+        if (kind === 'model' && options.brandHint) {
+            lines.push(`Brand hint: ${String(options.brandHint).trim()}`);
+        }
+        return lines.join('\n');
+    }
+
+    async translateNameWithDeepSeek(sourceText, options = {}) {
+        const input = String(sourceText || '').trim();
+        if (!input) return '';
+        if (!this.shouldUseDeepSeek()) return '';
+
+        const cacheKey = `${options.kind || 'name'}::${input}`;
+        if (this.deepseekTranslationCache.has(cacheKey)) {
+            return this.deepseekTranslationCache.get(cacheKey);
+        }
+
+        const payload = {
+            model: this.deepseekModel,
+            temperature: 0,
+            messages: [
+                { role: 'system', content: this.deepseekSystemPrompt },
+                { role: 'user', content: this.buildDeepSeekUserPrompt(input, options) }
+            ]
+        };
+
+        for (let attempt = 1; attempt <= this.deepseekMaxRetries; attempt++) {
+            try {
+                const response = await axios.post(this.deepseekApiUrl, payload, {
+                    timeout: this.deepseekTimeoutMs,
+                    headers: {
+                        Authorization: `Bearer ${this.deepseekApiKey}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const raw = response?.data?.choices?.[0]?.message?.content || '';
+                const translated = this.normalizeDeepSeekOutput(raw, options);
+                if (translated) {
+                    this.deepseekTranslationCache.set(cacheKey, translated);
+                    return translated;
+                }
+            } catch (error) {
+                this.log(`DeepSeek translation error (attempt ${attempt}/${this.deepseekMaxRetries})`, {
+                    kind: options.kind || 'name',
+                    source: input,
+                    error: error.message
+                });
+            }
+
+            if (attempt < this.deepseekMaxRetries) {
+                await this.sleep(this.deepseekRetryDelayMs);
+            }
+        }
+
+        this.deepseekTranslationCache.set(cacheKey, '');
+        return '';
+    }
+
     // Генерация ID автомобиля [2]
     generateCarId(apiCar, brand, model, year, mileage, price) {
         if (apiCar && apiCar.carid) {
@@ -188,50 +686,246 @@ class Che168Parser {
         return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
-    normalizeBrand(apiCar) {
+    normalizeChineseVehicleName(value) {
+        return String(value || '')
+            .replace(/^二手/u, '')
+            .replace(/\s*(20\d{2}|19\d{2})款[\s\S]*$/u, '')
+            .replace(/\s*(20\d{2}|19\d{2})[\s\S]*$/u, '')
+            .replace(/[【】[\]()（）]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    formatModelSlugToken(token) {
+        const cleaned = String(token || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+        if (!cleaned) return '';
+
+        const normalized = cleaned.replace(/-/g, '');
+        const compactMap = {
+            xrv: 'XR-V',
+            crv: 'CR-V',
+            cx5: 'CX-5',
+            cx30: 'CX-30',
+            q2l: 'Q2L',
+            q3: 'Q3',
+            x1: 'X1',
+            xtrail: 'X-TRAIL',
+            kx3: 'KX3',
+            ix25: 'IX25'
+        };
+
+        if (compactMap[normalized]) {
+            return compactMap[normalized];
+        }
+
+        if (/^[a-z]\d{1,3}[a-z0-9]*$/i.test(normalized)) {
+            return normalized.toUpperCase();
+        }
+
+        if (/^\d+[a-z]+$/i.test(normalized)) {
+            return normalized.toUpperCase();
+        }
+
+        if (/^[a-z0-9-]{2,30}$/i.test(cleaned)) {
+            return cleaned.replace(/-/g, ' ').toUpperCase();
+        }
+
+        return '';
+    }
+
+    stripBrandPrefixFromModelSlug(slug) {
+        const normalized = String(slug || '').trim().toLowerCase();
+        if (!normalized) return '';
+
+        const brandSlugs = Object.keys(this.brandSlugTranslations).sort((a, b) => b.length - a.length);
+        for (const brandSlug of brandSlugs) {
+            if (!normalized.startsWith(brandSlug) || normalized.length <= brandSlug.length) {
+                continue;
+            }
+            const remainder = normalized.slice(brandSlug.length).replace(/^-+/, '');
+            if (remainder && this.isLatinSlugSegment(remainder)) {
+                return remainder;
+            }
+        }
+
+        return '';
+    }
+
+    modelFromSlug(slug) {
+        const normalized = String(slug || '').trim().toLowerCase();
+        if (!normalized) return '';
+        if (this.modelSlugTranslations[normalized]) {
+            return this.modelSlugTranslations[normalized];
+        }
+
+        const stripped = this.stripBrandPrefixFromModelSlug(normalized);
+        if (stripped) {
+            if (this.modelSlugTranslations[stripped]) {
+                return this.modelSlugTranslations[stripped];
+            }
+            const fromStrippedToken = this.formatModelSlugToken(stripped);
+            if (fromStrippedToken) {
+                return fromStrippedToken;
+            }
+        }
+
+        const fromToken = this.formatModelSlugToken(normalized);
+        if (fromToken) {
+            return fromToken;
+        }
+
+        if (/^[a-z0-9-]{2,30}$/.test(normalized)) {
+            return normalized.replace(/-/g, ' ').toUpperCase();
+        }
+        return '';
+    }
+
+    brandFromSlug(slug) {
+        const normalized = String(slug || '').trim().toLowerCase();
+        if (!normalized) return '';
+        if (this.brandSlugTranslations[normalized]) {
+            return this.brandSlugTranslations[normalized];
+        }
+        if (/^[a-z0-9-]{2,30}$/.test(normalized)) {
+            return normalized.replace(/-/g, ' ').toUpperCase();
+        }
+        return '';
+    }
+
+    isLatinSlugSegment(value) {
+        const normalized = String(value || '').trim().toLowerCase();
+        if (!normalized) return false;
+        if (!/^[a-z0-9-]{2,40}$/i.test(normalized)) return false;
+        const reserved = new Set(['list', 'dealer', 'usedcar', 'ershouche']);
+        return !reserved.has(normalized);
+    }
+
+    extractBreadcrumbData($) {
+        const crumbs = [];
+        $('.bread-crumbs.content a').each((_, element) => {
+            const text = $(element).text().replace(/\s+/g, ' ').trim();
+            const href = ($(element).attr('href') || '').trim();
+            if (!text) return;
+            crumbs.push({ text, href });
+        });
+
+        if (crumbs.length === 0) {
+            return {};
+        }
+
+        let brandCn = '';
+        let modelCn = '';
+        let modelSpecCn = '';
+        let brandSlug = '';
+        let modelSlug = '';
+        const ignoredUsedNames = new Set(['车之家', '二手车之家', '二手车']);
+
+        // Обычно в крошках присутствуют "二手{бренд}" и "二手{модель}".
+        for (const crumb of crumbs) {
+            const path = crumb.href.replace(/^https?:\/\/[^/]+/i, '');
+            const pathNoHash = path.split('#')[0].split('?')[0];
+            const segments = pathNoHash.split('/').map(v => v.trim()).filter(Boolean);
+            const brandPathSlug = segments.length >= 2 && this.isLatinSlugSegment(segments[1]) ? segments[1].toLowerCase() : '';
+            const modelPathSlug = segments.length >= 3 && this.isLatinSlugSegment(segments[2]) ? segments[2].toLowerCase() : '';
+
+            const m = crumb.text.match(/^二手(.+)$/u);
+            if (m) {
+                const name = this.normalizeChineseVehicleName(m[1]);
+                if (name && !ignoredUsedNames.has(name)) {
+                    if (!brandCn && brandPathSlug) {
+                        brandCn = name;
+                    } else if (!modelCn && modelPathSlug) {
+                        modelCn = name;
+                    }
+                }
+            }
+
+            // типовой формат: /anshan/richan/xiaoke/s53438/
+            if (!brandSlug && brandPathSlug) {
+                brandSlug = brandPathSlug;
+            }
+            if (!modelSlug && modelPathSlug) {
+                modelSlug = modelPathSlug;
+            }
+        }
+
+        const lastCrumb = crumbs[crumbs.length - 1];
+        if (lastCrumb && lastCrumb.text) {
+            modelSpecCn = this.normalizeChineseVehicleName(lastCrumb.text);
+        }
+
+        return {
+            brand_cn: brandCn || '',
+            model_cn: modelCn || '',
+            model_spec_cn: modelSpecCn || '',
+            brand_slug: brandSlug || '',
+            model_slug: modelSlug || ''
+        };
+    }
+
+    normalizeBrand(apiCar, puppeteerDetails = {}) {
         const brandRaw = (apiCar.BrandName || '').trim();
-        if (!brandRaw) {
-            return apiCar.Brandid ? `BRAND_${apiCar.Brandid}` : 'UNKNOWN';
+        const breadcrumbBrand = (puppeteerDetails.brand_cn || '').trim();
+        const candidates = [breadcrumbBrand, brandRaw].filter(Boolean);
+
+        for (const candidate of candidates) {
+            if (this.brandTranslations[candidate]) {
+                return this.brandTranslations[candidate];
+            }
+            if (!this.containsNonAscii(candidate)) {
+                return candidate.toUpperCase();
+            }
         }
 
-        if (this.brandTranslations[brandRaw]) {
-            return this.brandTranslations[brandRaw];
-        }
-
-        if (!this.containsNonAscii(brandRaw)) {
-            return brandRaw.toUpperCase();
+        const fromSlug = this.brandFromSlug(puppeteerDetails.brand_slug || '');
+        if (fromSlug) {
+            return fromSlug;
         }
 
         return apiCar.Brandid ? `BRAND_${apiCar.Brandid}` : 'UNKNOWN';
     }
 
-    normalizeModel(apiCar, normalizedBrand) {
+    normalizeModel(apiCar, normalizedBrand, puppeteerDetails = {}) {
         const seriesName = (apiCar.SeriesName || '').trim();
         const carName = (apiCar.carname || '').trim();
         const specName = (apiCar.SpecName || '').trim();
+        const breadcrumbModel = (puppeteerDetails.model_cn || '').trim();
+        const breadcrumbSpec = (puppeteerDetails.model_spec_cn || '').trim();
 
-        const raw = seriesName || carName || specName;
+        const candidates = [
+            breadcrumbModel,
+            breadcrumbSpec,
+            seriesName,
+            carName,
+            specName
+        ].filter(Boolean);
+
+        for (const raw of candidates) {
+            for (const [cn, en] of Object.entries(this.modelTranslations)) {
+                if (raw.includes(cn)) {
+                    return en.toUpperCase();
+                }
+            }
+        }
+
+        const fromSlug = this.modelFromSlug(puppeteerDetails.model_slug || '');
+        if (fromSlug) {
+            return fromSlug;
+        }
+
+        const raw = candidates[0] || '';
         if (!raw) {
             return apiCar.Seriesid ? `SERIES_${apiCar.Seriesid}` : 'MODEL_UNKNOWN';
         }
 
-        for (const [cn, en] of Object.entries(this.modelTranslations)) {
-            if (raw.includes(cn) || carName.includes(cn) || seriesName.includes(cn)) {
-                return en.toUpperCase();
-            }
-        }
-
-        let cleaned = raw
-            .replace(/\s+\d{4}款.*$/u, '')
-            .replace(/\s+/g, ' ')
-            .trim();
+        let cleaned = this.normalizeChineseVehicleName(raw);
 
         if (normalizedBrand) {
             cleaned = cleaned.replace(new RegExp(`^${this.escapeRegex(normalizedBrand)}\\s*`, 'i'), '');
         }
-        const brandRaw = (apiCar.BrandName || '').trim();
-        if (brandRaw) {
-            cleaned = cleaned.replace(new RegExp(`^${this.escapeRegex(brandRaw)}\\s*`, 'u'), '');
+        const brandRawCn = (apiCar.BrandName || '').trim();
+        if (brandRawCn) {
+            cleaned = cleaned.replace(new RegExp(`^${this.escapeRegex(brandRawCn)}\\s*`, 'u'), '');
         }
 
         const modelCodeMatch = cleaned.match(/[A-Za-z][A-Za-z0-9\-+]{0,20}/g);
@@ -293,10 +987,10 @@ class Che168Parser {
         if (puppeteerDetails.fuelType === 'E') {
             return '';
         }
-        const text = `${apiCar.carname || ''} ${apiCar.SpecName || ''}`;
-        const m = text.match(/(\d\.\d)\s*L/i);
-        if (m) {
-            return String(Math.round(parseFloat(m[1]) * 1000));
+        const text = `${apiCar.carname || ''} ${apiCar.SpecName || ''} ${apiCar.power || ''}`;
+        const cc = this.extractEngineVolumeCcFromText(text);
+        if (Number.isFinite(cc)) {
+            return String(cc);
         }
         return '';
     }
@@ -307,30 +1001,80 @@ class Che168Parser {
             .trim();
     }
 
-    extractHorsepowerFromText(value) {
-        const match = String(value || '').match(/(\d{2,4})\s*马力/u);
-        if (!match) return null;
-        const hp = parseInt(match[1], 10);
-        if (!Number.isFinite(hp) || hp < 20 || hp > 2500) return null;
+    normalizeMetricValueText(value) {
+        return String(value || '')
+            .replace(/[，,]/g, '')
+            .replace(/\u3000/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    normalizeHorsepowerValue(value) {
+        const hp = Math.round(Number(value));
+        if (!Number.isFinite(hp) || hp < 20 || hp > 2500) {
+            return null;
+        }
         return hp;
     }
 
-    extractEngineVolumeCcFromText(value) {
-        const normalized = String(value || '');
-        const patterns = [
-            /排量[^0-9]{0,8}(\d+(?:\.\d+)?)\s*[TL]/iu,
-            /挡位\s*\/\s*排量[^0-9]{0,16}(?:自动|手动|CVT|AT|MT)?\s*\/\s*(\d+(?:\.\d+)?)\s*L/iu,
-            /发动机[^0-9]{0,8}(\d+(?:\.\d+)?)\s*[TL]/iu,
-            /(\d+(?:\.\d+)?)\s*L/iu,
-            /(\d+(?:\.\d+)?)\s*T/iu
+    extractHorsepowerFromText(value) {
+        const normalized = this.normalizeMetricValueText(value);
+        if (!normalized) return null;
+
+        const directHpPatterns = [
+            /(\d{2,4}(?:\.\d+)?)\s*(?:马力|匹)(?=[^A-Za-z0-9]|$)/u,
+            /(\d{2,4}(?:\.\d+)?)\s*P[Ss](?=[^A-Za-z0-9]|$)/u
         ];
 
-        for (const pattern of patterns) {
+        for (const pattern of directHpPatterns) {
             const match = normalized.match(pattern);
             if (!match) continue;
-            const liters = parseFloat(match[1]);
-            if (!Number.isFinite(liters)) continue;
-            if (liters < 0.6 || liters > 8.5) continue;
+            const hp = this.normalizeHorsepowerValue(match[1]);
+            if (Number.isFinite(hp)) return hp;
+        }
+
+        const kwMatch = normalized.match(/(\d{2,4}(?:\.\d+)?)\s*(?:kW(?!h)|KW(?!h)|千瓦)(?=[^A-Za-z0-9]|$)/u);
+        if (kwMatch) {
+            const kw = Number(kwMatch[1]);
+            if (Number.isFinite(kw) && kw >= 15 && kw <= 1800) {
+                const hp = this.normalizeHorsepowerValue(kw * 1.35962);
+                if (Number.isFinite(hp)) return hp;
+            }
+        }
+
+        return null;
+    }
+
+    extractEngineVolumeCcFromText(value) {
+        const normalized = this.normalizeMetricValueText(value);
+        if (!normalized) return null;
+
+        const ccPatterns = [
+            /(\d{3,5})\s*(?:mL|ML|ml|毫升|cc|CC|cm3|CM3)(?=[^A-Za-z0-9]|$)/u,
+            /排量[^0-9]{0,8}(\d{3,5})(?!\d)/u
+        ];
+
+        for (const pattern of ccPatterns) {
+            const match = normalized.match(pattern);
+            if (!match) continue;
+            const cc = Math.round(Number(match[1]));
+            if (Number.isFinite(cc) && cc >= 600 && cc <= 8500) {
+                return cc;
+            }
+        }
+
+        const literPatterns = [
+            /排量[^0-9]{0,8}(\d+(?:\.\d+)?)\s*(?:L|升|T)(?=[^A-Za-z0-9]|$)/iu,
+            /挡位\s*\/\s*排量[^0-9]{0,16}(?:自动|手动|CVT|AT|MT)?\s*\/\s*(\d+(?:\.\d+)?)\s*(?:L|升|T)(?=[^A-Za-z0-9]|$)/iu,
+            /发动机[^0-9]{0,8}(\d+(?:\.\d+)?)\s*(?:L|升|T)(?=[^A-Za-z0-9]|$)/iu,
+            /(\d+(?:\.\d+)?)\s*(?:L|升|T)(?=[^A-Za-z0-9]|$)/iu
+        ];
+
+        for (const pattern of literPatterns) {
+            const match = normalized.match(pattern);
+            if (!match) continue;
+            const liters = Number(match[1]);
+            if (!Number.isFinite(liters) || liters < 0.6 || liters > 8.5) continue;
             return Math.round(liters * 1000);
         }
 
@@ -338,20 +1082,35 @@ class Che168Parser {
     }
 
     extractMileageKmFromText(value) {
-        const normalized = String(value || '');
-        const wanMatch = normalized.match(/(\d+(?:\.\d+)?)\s*万公里/iu);
+        const normalized = this.normalizeMetricValueText(value);
+        if (!normalized) return null;
+
+        const wanMatch = normalized.match(/(\d+(?:\.\d+)?)\s*万(?:公里|千米|km)?/iu);
         if (wanMatch) {
-            const mileage = parseFloat(wanMatch[1]) * 10000;
+            const mileage = Number(wanMatch[1]) * 10000;
             return Number.isFinite(mileage) ? Math.round(mileage) : null;
         }
 
-        const kmMatch = normalized.match(/(\d+(?:\.\d+)?)\s*公里/iu);
+        const kmMatch = normalized.match(/(\d+(?:\.\d+)?)\s*(?:公里|千米|km)(?=[^A-Za-z0-9]|$)/iu);
         if (kmMatch) {
-            const mileage = parseFloat(kmMatch[1]);
+            const mileage = Number(kmMatch[1]);
             return Number.isFinite(mileage) ? Math.round(mileage) : null;
+        }
+
+        const plainMatch = normalized.match(/^(\d+(?:\.\d+)?)$/u);
+        if (plainMatch) {
+            const numeric = Number(plainMatch[1]);
+            if (!Number.isFinite(numeric) || numeric < 0) return null;
+            if (numeric <= 20) return Math.round(numeric * 10000);
+            return Math.round(numeric);
         }
 
         return null;
+    }
+
+    extractHorsepowerFromApi(apiCar) {
+        const source = `${apiCar?.carname || ''} ${apiCar?.SpecName || ''} ${apiCar?.power || ''}`;
+        return this.extractHorsepowerFromText(source);
     }
 
     extractMileageKmFromApi(apiCar) {
@@ -680,7 +1439,7 @@ class Che168Parser {
 
             await page.goto(url, {
                 waitUntil: 'networkidle2',
-                timeout: 60000
+                timeout: this.puppeteerNavTimeoutMs
             });
 
             // Проверяем Security Verification
@@ -711,6 +1470,13 @@ class Che168Parser {
 
             const html = await page.content();
             const details = this.parseDetailsFromHTML(html);
+
+            if (details?.security_blocked) {
+                return { error: 'Security verification blocked' };
+            }
+            if (!this.hasSufficientParsedDetails(details)) {
+                return { error: 'Insufficient parsed details' };
+            }
 
             // Извлекаем изображения из галереи
             details.images = await this.extractGalleryImages(page);
@@ -768,6 +1534,12 @@ class Che168Parser {
         const $ = cheerio.load(html);
         const details = {};
         const bodyText = $('body').text();
+        const breadcrumbData = this.extractBreadcrumbData($);
+
+        if (breadcrumbData && Object.keys(breadcrumbData).length > 0) {
+            Object.assign(details, breadcrumbData);
+            this.log('Parsed breadcrumb data', breadcrumbData);
+        }
 
         this.log(`Parsing HTML, body length: ${bodyText.length} chars`);
 
@@ -905,19 +1677,24 @@ class Che168Parser {
         }
 
         if (!details.horsepower) {
-            const horsepowerMatch = bodyText.match(/(\d{2,4})\s*马力/u);
-            if (horsepowerMatch) {
-                details.horsepower = parseInt(horsepowerMatch[1], 10);
+            const horsepowerContext =
+                bodyText.match(/(?:发动机|电动机|最大马力|综合马力|马力|功率)[\s\S]{0,96}/u)?.[0] || '';
+            const hp = this.extractHorsepowerFromText(horsepowerContext);
+            if (Number.isFinite(hp)) {
+                details.horsepower = hp;
                 this.log(`Found horsepower: ${details.horsepower}`);
             }
         }
 
         if (!details.mileage) {
-            const mileageMatch = bodyText.match(/表显里程[\s:：]*([0-9]+(?:\.[0-9]+)?)\s*万公里/u)
-                || bodyText.match(/([0-9]+(?:\.[0-9]+)?)\s*万公里/u);
-            if (mileageMatch) {
-                details.mileage = Math.round(parseFloat(mileageMatch[1]) * 10000);
-                this.log(`Found mileage fallback: ${mileageMatch[1]}万公里 = ${details.mileage} km`);
+            const mileageContext =
+                bodyText.match(/(?:表显里程|里程)[\s:：]*[0-9.,，]+(?:\.[0-9]+)?\s*(?:万)?\s*(?:公里|千米|km)?/iu)?.[0]
+                || bodyText.match(/[0-9]+(?:\.[0-9]+)?\s*万公里/u)?.[0]
+                || '';
+            const mileage = this.extractMileageKmFromText(mileageContext);
+            if (Number.isFinite(mileage)) {
+                details.mileage = mileage;
+                this.log(`Found mileage fallback: ${mileageContext} = ${details.mileage} km`);
             }
         }
 
@@ -939,16 +1716,12 @@ class Che168Parser {
         }
 
         if (!details.engineVolume) {
-            const engineContextMatch =
-                bodyText.match(/挡位\s*\/\s*排量[\s\S]{0,24}?(\d+(?:\.\d+)?)\s*L/u)
-                || bodyText.match(/排量[\s:：]*([0-9]+(?:\.[0-9]+)?)\s*L/u)
-                || bodyText.match(/发动机[\s:：]*([0-9]+(?:\.[0-9]+)?)\s*[TL]/u);
-            if (engineContextMatch) {
-                const liters = parseFloat(engineContextMatch[1]);
-                if (Number.isFinite(liters) && liters >= 0.6 && liters <= 8.5) {
-                    details.engineVolume = Math.round(liters * 1000);
-                    this.log(`Found engine volume fallback: ${liters}L = ${details.engineVolume} cc`);
-                }
+            const engineContext =
+                bodyText.match(/(?:挡位\s*\/\s*排量|排量|发动机|电动机)[\s\S]{0,96}/u)?.[0] || '';
+            const cc = this.extractEngineVolumeCcFromText(engineContext);
+            if (Number.isFinite(cc)) {
+                details.engineVolume = cc;
+                this.log(`Found engine volume fallback: ${engineContext} -> ${details.engineVolume} cc`);
             }
         }
 
@@ -1011,9 +1784,44 @@ class Che168Parser {
     // Преобразование данных автомобиля в формат для базы данных
     async prepareCarData(apiCar, puppeteerDetails) {
         try {
+            const normalizedDetails = puppeteerDetails || {};
+
             // Применяем нормализацию бренда/модели без иероглифов.
-            const brandEnglish = this.normalizeBrand(apiCar);
-            const modelEnglish = this.normalizeModel(apiCar, brandEnglish);
+            let brandEnglish = this.normalizeBrand(apiCar, normalizedDetails);
+            const brandSource = String(normalizedDetails.brand_cn || apiCar.BrandName || '').trim();
+            if (
+                (/^BRAND_/i.test(brandEnglish) || /^UNKNOWN$/i.test(brandEnglish) || this.containsNonAscii(brandEnglish))
+                && brandSource
+            ) {
+                const translatedBrand = await this.translateNameWithDeepSeek(brandSource, { kind: 'brand' });
+                if (translatedBrand) {
+                    brandEnglish = translatedBrand;
+                }
+            }
+
+            let modelEnglish = this.normalizeModel(apiCar, brandEnglish, normalizedDetails);
+            const modelSource = String(
+                normalizedDetails.model_cn
+                || normalizedDetails.model_spec_cn
+                || apiCar.SeriesName
+                || apiCar.carname
+                || apiCar.SpecName
+                || ''
+            ).trim();
+            if (
+                (
+                    /^SERIES_/i.test(modelEnglish)
+                    || /^MODEL_UNKNOWN$/i.test(modelEnglish)
+                    || this.containsNonAscii(modelEnglish)
+                    || (String(modelEnglish || '').trim().length <= 1 && this.containsNonAscii(modelSource))
+                )
+                && modelSource
+            ) {
+                const translatedModel = await this.translateNameWithDeepSeek(modelSource, { kind: 'model' });
+                if (translatedModel) {
+                    modelEnglish = translatedModel;
+                }
+            }
 
             // Генерация ID [2]
             const carId = this.generateCarId(
@@ -1025,15 +1833,18 @@ class Che168Parser {
                 apiCar.price
             );
 
-            const fuelType = this.inferFuelType(apiCar, puppeteerDetails);
-            const transmission = this.inferTransmission(apiCar, puppeteerDetails);
-            const drive = this.inferDrive(apiCar, puppeteerDetails);
-            const engineCc = this.extractEngineCc(apiCar, puppeteerDetails);
-            const imageList = this.normalizeImageList(puppeteerDetails.images || apiCar.image || '');
+            const fuelType = this.inferFuelType(apiCar, normalizedDetails);
+            const transmission = this.inferTransmission(apiCar, normalizedDetails);
+            const drive = this.inferDrive(apiCar, normalizedDetails);
+            const engineCc = this.extractEngineCc(apiCar, normalizedDetails);
+            const horsepower = Number.isFinite(Number(normalizedDetails.horsepower))
+                ? Math.round(Number(normalizedDetails.horsepower))
+                : this.extractHorsepowerFromApi(apiCar);
+            const imageList = this.normalizeImageList(normalizedDetails.images || apiCar.image || '');
             const localizedImages = await this.localizeImages(imageList, brandEnglish, modelEnglish, carId);
-            const basePrice = puppeteerDetails.price ? puppeteerDetails.price : (parseFloat(apiCar.price) * 10000);
-            const mileageKm = Number.isFinite(Number(puppeteerDetails.mileage))
-                ? Math.round(Number(puppeteerDetails.mileage))
+            const basePrice = normalizedDetails.price ? normalizedDetails.price : (parseFloat(apiCar.price) * 10000);
+            const mileageKm = Number.isFinite(Number(normalizedDetails.mileage))
+                ? Math.round(Number(normalizedDetails.mileage))
                 : this.extractMileageKmFromApi(apiCar);
 
             // Формируем данные в формате CarModel [2]
@@ -1044,13 +1855,13 @@ class Che168Parser {
                 MARKA_NAME: brandEnglish,
                 MODEL_ID: '',
                 MODEL_NAME: modelEnglish,
-                YEAR: puppeteerDetails.year || apiCar.registrationdate || '',
+                YEAR: normalizedDetails.year || apiCar.registrationdate || '',
                 TOWN: apiCar.cname || '',
                 ENG_V: engineCc,
-                PW: puppeteerDetails.horsepower ? puppeteerDetails.horsepower.toString() : '',
+                PW: Number.isFinite(horsepower) ? String(horsepower) : '',
                 KUZOV: '',
                 GRADE: '',
-                COLOR: puppeteerDetails.color_en || puppeteerDetails.color || '',
+                COLOR: normalizedDetails.color_en || normalizedDetails.color || '',
                 KPP: transmission,
                 KPP_TYPE: transmission,
                 PRIV: drive,
@@ -1159,12 +1970,30 @@ class Che168Parser {
         try {
             this.log(`Processing car: ${apiCar.carname} (ID: ${apiCar.carid})`);
 
-            // Получаем детальную информацию через Puppeteer
-            const puppeteerDetails = await this.parseCarDetailsWithPuppeteer(apiCar.carid);
+            // Получаем детальную информацию через Puppeteer с ретраями при сетевых сбоях.
+            let puppeteerDetails = null;
+            for (let attempt = 1; attempt <= this.puppeteerMaxAttempts; attempt++) {
+                if (attempt > 1) {
+                    this.log(`Puppeteer retry ${attempt}/${this.puppeteerMaxAttempts} for car ${apiCar.carid}`);
+                }
 
-            if (puppeteerDetails.error) {
-                this.log(`Skipping car ${apiCar.carid} due to Puppeteer error:`, puppeteerDetails.error);
-                return false;
+                puppeteerDetails = await this.parseCarDetailsWithPuppeteer(apiCar.carid);
+                if (puppeteerDetails && !puppeteerDetails.error) {
+                    break;
+                }
+
+                const errorMessage = puppeteerDetails?.error || 'unknown puppeteer error';
+                const shouldRetry = this.isRetryablePuppeteerError(errorMessage);
+                const hasAttemptsLeft = attempt < this.puppeteerMaxAttempts;
+
+                if (!shouldRetry || !hasAttemptsLeft) {
+                    this.log(`Skipping car ${apiCar.carid} due to Puppeteer error:`, errorMessage);
+                    return false;
+                }
+
+                const retryDelayMs = this.getRetryDelayMs(attempt);
+                this.log(`Transient Puppeteer error for car ${apiCar.carid}. Retry in ${retryDelayMs} ms`, errorMessage);
+                await this.sleep(retryDelayMs);
             }
 
             // Подготавливаем данные для базы
