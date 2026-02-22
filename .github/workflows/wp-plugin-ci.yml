@@ -1,4 +1,4 @@
-name: WP Plugin CI
+name: WP Plugin Build CI
 
 on:
   pull_request:
