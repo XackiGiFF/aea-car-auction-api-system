@@ -93,6 +93,8 @@ services:
       DB_PORT: 3306
       NODE_ENV: production
       MEDIA_SERVICE_URL: http://cdn-media-bot-v2:3010
+    volumes:
+      - che_parser_data:/app/data
     healthcheck:
       test: ["CMD", "pgrep", "-f", "node"]
       interval: 30s
@@ -154,3 +156,4 @@ networks:
 
 volumes:
   cdn_media_data:
+  che_parser_data:

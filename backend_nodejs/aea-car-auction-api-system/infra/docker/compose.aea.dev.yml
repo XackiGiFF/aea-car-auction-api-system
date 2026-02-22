@@ -18,6 +18,35 @@ services:
     networks:
       - aea_network
 
+  phpmyadmin:
+    container_name: MYADMIN
+    image: phpmyadmin/phpmyadmin
+    links:
+      - api_mariadb:db
+    expose:
+      - "80"
+    networks:
+      - aea_network
+    env_file:
+      - .env
+    depends_on:
+      api_mariadb:
+        condition: service_healthy
+
+  phpmyadmin-proxy:
+    image: node:20-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-simpleweb}-phpmyadmin-proxy
+    restart: unless-stopped
+    command: >
+      sh -lc "node -e \"const http=require('http');http.createServer((req,res)=>{const o={hostname:'phpmyadmin',port:80,path:req.url,method:req.method,headers:req.headers};const p=http.request(o,(pr)=>{res.writeHead(pr.statusCode||502,pr.headers);pr.pipe(res);});p.on('error',(e)=>{res.statusCode=502;res.end('proxy error: '+e.message)});req.pipe(p);}).listen(8765,'0.0.0.0');\""
+    depends_on:
+      phpmyadmin:
+        condition: service_started
+    ports:
+      - "8765:8765"
+    networks:
+      - aea_network
+
   api-gateway:
     build:
       context: ../../api-gateway
@@ -39,7 +68,7 @@ services:
     ports:
       - "${API_GATEWAY_PORT:-3000}:3000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -86,6 +115,7 @@ services:
     volumes:
       - ../../che-parser-bot:/app
       - /app/node_modules
+      - che_parser_data:/app/data
     env_file:
       - ../../che-parser-bot/.env
     environment:
@@ -153,3 +183,4 @@ services:
 
 volumes:
   cdn_media_data:
+  che_parser_data:
