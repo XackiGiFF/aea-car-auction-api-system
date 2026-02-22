@@ -2,6 +2,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const puppeteer = require('puppeteer');
 const crypto = require('crypto');
+const fsSync = require('fs');
 const fs = require('fs/promises');
 const path = require('path');
 require('dotenv').config();
@@ -27,59 +28,46 @@ class Che168Parser {
         this.purgeDeletedEnabled = String(process.env.PURGE_DELETED_ENABLED || 'true').toLowerCase() === 'true';
         this.purgeDeletedAfterHours = Number(process.env.PURGE_DELETED_AFTER_HOURS || 48);
         this.purgeDeletedBatchSize = Number(process.env.PURGE_DELETED_BATCH_SIZE || 5000);
+        this.puppeteerMaxAttempts = Math.max(1, Number(process.env.CHE_PUPPETEER_MAX_ATTEMPTS || 8));
+        this.puppeteerRetryDelayMs = Math.max(1000, Number(process.env.CHE_PUPPETEER_RETRY_DELAY_MS || 5000));
+        this.puppeteerRetryMaxDelayMs = Math.max(
+            this.puppeteerRetryDelayMs,
+            Number(process.env.CHE_PUPPETEER_RETRY_MAX_DELAY_MS || 30000)
+        );
+        this.puppeteerNavTimeoutMs = Math.max(30000, Number(process.env.CHE_PUPPETEER_NAV_TIMEOUT_MS || 60000));
+        this.deepseekApiUrl = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/chat/completions';
+        this.deepseekApiKey = process.env.DEEPSEEK_API_KEY || '';
+        const deepseekEnabledEnv = String(process.env.DEEPSEEK_ENABLED || '').trim().toLowerCase();
+        this.deepseekEnabled = deepseekEnabledEnv ? deepseekEnabledEnv === 'true' : Boolean(this.deepseekApiKey);
+        this.deepseekModel = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
+        this.deepseekTimeoutMs = Math.max(3000, Number(process.env.DEEPSEEK_TIMEOUT_MS || 12000));
+        this.deepseekMaxRetries = Math.max(1, Number(process.env.DEEPSEEK_MAX_RETRIES || 2));
+        this.deepseekRetryDelayMs = Math.max(500, Number(process.env.DEEPSEEK_RETRY_DELAY_MS || 1500));
+        this.deepseekTranslationCache = new Map();
+        this.translationCacheFile = process.env.CHE_TRANSLATION_CACHE_FILE
+            || path.join(__dirname, '..', 'data', 'che-translations.cache.json');
+        this.translationFileCache = { brand: {}, model: {} };
+        this.translationCacheLoaded = false;
+        this.translationCacheLoadingPromise = null;
+        this.translationCacheWritePromise = Promise.resolve();
+        this.deepseekSystemPrompt = [
+            'You are an automotive name translator.',
+            'Translate exactly one car brand or model name into English.',
+            'Output ONLY the translated name.',
+            'No explanations, no extra words, no punctuation, no quotes.',
+            'Use uppercase Latin letters.',
+            'Preserve standard automotive formatting when known (e.g., XR-V, CX-5, X-TRAIL, QASHQAI).',
+            'If input is already English, return normalized uppercase.',
+            'If exact English equivalent is unknown, return pinyin transliteration in uppercase.'
+        ].join(' ');
 
-        // Словарь для перевода китайских марок на английские
-        this.brandTranslations = {
-            '丰田': 'TOYOTA',
-            '本田': 'HONDA',
-            '马自达': 'MAZDA',
-            '奥迪': 'AUDI',
-            '大众': 'VOLKSWAGEN',
-            '宝马': 'BMW',
-            '奔驰': 'MERCEDES',
-            '斯柯达': 'SKODA',
-            '日产': 'NISSAN',
-            '现代': 'HYUNDAI',
-            '起亚': 'KIA',
-            '吉利汽车': 'GEELY',
-            '哈弗': 'HAVAL',
-            '奇瑞': 'CHERY',
-            '斯巴鲁': 'SUBARU',
-            '长安': 'CHANGAN',
-            '比亚迪': 'BYD',
-            '特斯拉': 'TESLA',
-            '福特': 'FORD',
-            '雪佛兰': 'CHEVROLET',
-            '别克': 'BUICK',
-            '雷克萨斯': 'LEXUS',
-            '长安启源': 'CHANGAN QIYUAN',
-            '领克': 'LYNK&CO'
-        };
-
-        // Словарь для перевода моделей
-        this.modelTranslations = {
-            'CX-30': 'CX-30',
-            'CX-5': 'CX-5',
-            'XR-V': 'XR-V',
-            'A3': 'A3',
-            'T-ROC探歌': 'T-ROC',
-            '雷凌': 'LEVIN',
-            '卡罗拉': 'COROLLA',
-            '雅阁': 'ACCORD',
-            '思域': 'CIVIC',
-            'CR-V': 'CR-V',
-            '途观': 'TIGUAN',
-            '帕萨特': 'PASSAT',
-            '朗逸': 'LAVIDA',
-            '速腾': 'SAGITAR',
-            '昂克赛拉': 'AXELA',
-            '探岳': 'TAYRON',
-            '森林人': 'FORESTER',
-            '明锐': 'OCTAVIA',
-            '雷克萨斯NX': 'NX',
-            '缤智': 'VEZEL',
-            '凌渡': 'LAMANDO'
-        };
+        this.translationSeedFile = process.env.CHE_TRANSLATION_SEED_FILE
+            || path.join(__dirname, '..', 'config', 'translations.seed.json');
+        const translationSeed = this.loadTranslationSeed();
+        this.brandTranslations = translationSeed.brand;
+        this.modelTranslations = translationSeed.model;
+        this.brandSlugTranslations = translationSeed.brand_slug;
+        this.modelSlugTranslations = translationSeed.model_slug;
 
         // Маппинг цветов
         this.colorTranslations = {
@@ -153,6 +141,321 @@ class Che168Parser {
         }
     }
 
+    sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    isRetryablePuppeteerError(errorMessage) {
+        const message = String(errorMessage || '');
+        return /ERR_CONNECTION_CLOSED|ERR_CONNECTION_RESET|ERR_TIMED_OUT|ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED|Navigation timeout|Target closed|Protocol error|Security verification blocked|Insufficient parsed details|Execution context was destroyed/i.test(message);
+    }
+
+    getRetryDelayMs(attemptNumber) {
+        const exponent = Math.max(0, Number(attemptNumber || 1) - 1);
+        const delay = this.puppeteerRetryDelayMs * Math.pow(2, exponent);
+        return Math.min(delay, this.puppeteerRetryMaxDelayMs);
+    }
+
+    hasSufficientParsedDetails(details = {}) {
+        const signals = [
+            'price',
+            'mileage',
+            'year',
+            'engineVolume',
+            'horsepower',
+            'transmission',
+            'drive',
+            'fuelType',
+            'batteryKwh'
+        ];
+        return signals.some((field) => details[field] !== undefined && details[field] !== null && details[field] !== '');
+    }
+
+    loadTranslationSeed() {
+        const empty = {
+            brand: {},
+            model: {},
+            brand_slug: {},
+            model_slug: {}
+        };
+
+        try {
+            const raw = fsSync.readFileSync(this.translationSeedFile, 'utf8');
+            const parsed = JSON.parse(raw || '{}');
+
+            const normalizeMap = (input, options = {}) => {
+                const source = input && typeof input === 'object' ? input : {};
+                const result = {};
+                const keyFormatter = options.keyFormatter || ((v) => String(v || '').trim());
+                const valueFormatter = options.valueFormatter || ((v) => String(v || '').trim().toUpperCase());
+
+                for (const [rawKey, rawValue] of Object.entries(source)) {
+                    const key = keyFormatter(rawKey);
+                    const value = valueFormatter(rawValue);
+                    if (!key || !value) continue;
+                    result[key] = value;
+                }
+
+                return result;
+            };
+
+            return {
+                brand: normalizeMap(parsed.brand),
+                model: normalizeMap(parsed.model),
+                brand_slug: normalizeMap(parsed.brand_slug, {
+                    keyFormatter: (v) => String(v || '').trim().toLowerCase()
+                }),
+                model_slug: normalizeMap(parsed.model_slug, {
+                    keyFormatter: (v) => String(v || '').trim().toLowerCase()
+                })
+            };
+        } catch (error) {
+            console.error(`[CHE168] Failed to load translation seed ${this.translationSeedFile}: ${error.message}`);
+            return empty;
+        }
+    }
+
+    shouldUseDeepSeek() {
+        return Boolean(this.deepseekEnabled && this.deepseekApiKey);
+    }
+
+    normalizeTranslationKind(kind) {
+        return kind === 'brand' ? 'brand' : 'model';
+    }
+
+    normalizeTranslationCacheKey(value) {
+        return String(value || '')
+            .replace(/[\u00A0\s]+/g, ' ')
+            .trim()
+            .toUpperCase();
+    }
+
+    async ensureTranslationCacheLoaded() {
+        if (this.translationCacheLoaded) {
+            return;
+        }
+        if (this.translationCacheLoadingPromise) {
+            await this.translationCacheLoadingPromise;
+            return;
+        }
+
+        this.translationCacheLoadingPromise = (async () => {
+            const seedBrand = this.brandTranslations || {};
+            const seedModel = this.modelTranslations || {};
+            try {
+                const raw = await fs.readFile(this.translationCacheFile, 'utf8');
+                const parsed = JSON.parse(raw || '{}');
+                this.translationFileCache = {
+                    brand: {
+                        ...seedBrand,
+                        ...(parsed?.brand && typeof parsed.brand === 'object' ? parsed.brand : {})
+                    },
+                    model: {
+                        ...seedModel,
+                        ...(parsed?.model && typeof parsed.model === 'object' ? parsed.model : {})
+                    }
+                };
+                this.log('Loaded translation cache file', {
+                    file: this.translationCacheFile,
+                    brand_entries: Object.keys(this.translationFileCache.brand).length,
+                    model_entries: Object.keys(this.translationFileCache.model).length
+                });
+            } catch (error) {
+                this.translationFileCache = {
+                    brand: { ...seedBrand },
+                    model: { ...seedModel }
+                };
+
+                if (error.code === 'ENOENT') {
+                    this.log('Translation cache file not found. Bootstrap from seed and create file', {
+                        file: this.translationCacheFile,
+                        brand_entries: Object.keys(this.translationFileCache.brand).length,
+                        model_entries: Object.keys(this.translationFileCache.model).length
+                    });
+                    await this.persistTranslationCacheToFile();
+                } else {
+                    this.log(`Failed to load translation cache file: ${error.message}`);
+                }
+            } finally {
+                this.translationCacheLoaded = true;
+                this.translationCacheLoadingPromise = null;
+            }
+        })();
+
+        await this.translationCacheLoadingPromise;
+    }
+
+    getTranslationFromCache(kind, sourceText) {
+        const normalizedKind = this.normalizeTranslationKind(kind);
+        const key = this.normalizeTranslationCacheKey(sourceText);
+        if (!key) return '';
+
+        const runtimeKey = `${normalizedKind}::${key}`;
+        if (this.deepseekTranslationCache.has(runtimeKey)) {
+            return this.deepseekTranslationCache.get(runtimeKey);
+        }
+
+        const fromFile = this.translationFileCache?.[normalizedKind]?.[key] || '';
+        if (fromFile) {
+            this.deepseekTranslationCache.set(runtimeKey, fromFile);
+            return fromFile;
+        }
+
+        return '';
+    }
+
+    async saveTranslationToCache(kind, sourceText, translatedText) {
+        const normalizedKind = this.normalizeTranslationKind(kind);
+        const key = this.normalizeTranslationCacheKey(sourceText);
+        if (!key) return;
+
+        const translated = this.normalizeDeepSeekOutput(translatedText, { kind: normalizedKind });
+        if (!translated) return;
+
+        const runtimeKey = `${normalizedKind}::${key}`;
+        this.deepseekTranslationCache.set(runtimeKey, translated);
+
+        if (this.translationFileCache[normalizedKind][key] === translated) {
+            return;
+        }
+
+        this.translationFileCache[normalizedKind][key] = translated;
+        await this.persistTranslationCacheToFile();
+    }
+
+    async persistTranslationCacheToFile() {
+        const payload = JSON.stringify({
+            version: 1,
+            updated_at: new Date().toISOString(),
+            brand: this.translationFileCache.brand || {},
+            model: this.translationFileCache.model || {}
+        }, null, 2);
+
+        const filePath = this.translationCacheFile;
+        const tmpPath = `${filePath}.tmp`;
+
+        this.translationCacheWritePromise = this.translationCacheWritePromise.then(async () => {
+            await fs.mkdir(path.dirname(filePath), { recursive: true });
+            await fs.writeFile(tmpPath, payload, 'utf8');
+            await fs.rename(tmpPath, filePath);
+        }).catch((error) => {
+            this.log(`Failed to persist translation cache: ${error.message}`);
+        });
+
+        await this.translationCacheWritePromise;
+    }
+
+    normalizeDeepSeekOutput(value, options = {}) {
+        const lines = String(value || '')
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+        if (lines.length === 0) return '';
+
+        let text = lines[0];
+        text = text
+            .replace(/^translation\s*[:：-]\s*/i, '')
+            .replace(/^brand\s*[:：-]\s*/i, '')
+            .replace(/^model\s*[:：-]\s*/i, '')
+            .replace(/^['"`]+|['"`]+$/g, '')
+            .trim();
+
+        if (!text) return '';
+
+        const fragments = text.match(/[A-Za-z0-9][A-Za-z0-9&+\-/ ]{1,60}/g);
+        if (fragments && fragments.length > 0) {
+            text = fragments[fragments.length - 1].trim();
+        }
+
+        text = text.toUpperCase().replace(/\s+/g, ' ').trim();
+
+        if (options.kind === 'model' && options.brandHint) {
+            const brandHint = String(options.brandHint)
+                .toUpperCase()
+                .replace(/[^A-Z0-9&+\-/ ]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (brandHint && text.startsWith(`${brandHint} `)) {
+                text = text.slice(brandHint.length).trim();
+            }
+        }
+
+        if (!text || text.length > 40) return '';
+        if (/[^A-Z0-9&+\-/ ]/.test(text)) return '';
+        if (!/[A-Z]/.test(text)) return '';
+
+        return text;
+    }
+
+    buildDeepSeekUserPrompt(sourceText, options = {}) {
+        const kind = options.kind === 'brand' ? 'brand' : 'model';
+        const lines = [`Input ${kind} name: ${String(sourceText || '').trim()}`];
+        if (kind === 'model' && options.brandHint) {
+            lines.push(`Brand hint: ${String(options.brandHint).trim()}`);
+        }
+        return lines.join('\n');
+    }
+
+    async translateNameWithDeepSeek(sourceText, options = {}) {
+        const input = String(sourceText || '').trim();
+        if (!input) return '';
+        const kind = this.normalizeTranslationKind(options.kind);
+
+        await this.ensureTranslationCacheLoaded();
+
+        const fromCache = this.getTranslationFromCache(kind, input);
+        if (fromCache) {
+            return fromCache;
+        }
+        if (!this.shouldUseDeepSeek()) return '';
+
+        const cacheKey = `${kind}::${this.normalizeTranslationCacheKey(input)}`;
+        if (this.deepseekTranslationCache.has(cacheKey)) {
+            return this.deepseekTranslationCache.get(cacheKey);
+        }
+
+        const payload = {
+            model: this.deepseekModel,
+            temperature: 0,
+            messages: [
+                { role: 'system', content: this.deepseekSystemPrompt },
+                { role: 'user', content: this.buildDeepSeekUserPrompt(input, options) }
+            ]
+        };
+
+        for (let attempt = 1; attempt <= this.deepseekMaxRetries; attempt++) {
+            try {
+                const response = await axios.post(this.deepseekApiUrl, payload, {
+                    timeout: this.deepseekTimeoutMs,
+                    headers: {
+                        Authorization: `Bearer ${this.deepseekApiKey}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const raw = response?.data?.choices?.[0]?.message?.content || '';
+                const translated = this.normalizeDeepSeekOutput(raw, { ...options, kind });
+                if (translated) {
+                    await this.saveTranslationToCache(kind, input, translated);
+                    return translated;
+                }
+            } catch (error) {
+                this.log(`DeepSeek translation error (attempt ${attempt}/${this.deepseekMaxRetries})`, {
+                    kind,
+                    source: input,
+                    error: error.message
+                });
+            }
+
+            if (attempt < this.deepseekMaxRetries) {
+                await this.sleep(this.deepseekRetryDelayMs);
+            }
+        }
+
+        this.deepseekTranslationCache.set(cacheKey, '');
+        return '';
+    }
+
     // Генерация ID автомобиля [2]
     generateCarId(apiCar, brand, model, year, mileage, price) {
         if (apiCar && apiCar.carid) {
@@ -188,50 +491,259 @@ class Che168Parser {
         return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
-    normalizeBrand(apiCar) {
+    normalizeChineseVehicleName(value) {
+        return String(value || '')
+            .replace(/^二手/u, '')
+            .replace(/\s*(20\d{2}|19\d{2})款[\s\S]*$/u, '')
+            .replace(/\s*(20\d{2}|19\d{2})[\s\S]*$/u, '')
+            .replace(/[【】[\]()（）]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    formatModelSlugToken(token) {
+        const cleaned = String(token || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+        if (!cleaned) return '';
+
+        const normalized = cleaned.replace(/-/g, '');
+        const compactMap = {
+            xrv: 'XR-V',
+            crv: 'CR-V',
+            cx5: 'CX-5',
+            cx30: 'CX-30',
+            q2l: 'Q2L',
+            q3: 'Q3',
+            x1: 'X1',
+            xtrail: 'X-TRAIL',
+            kx3: 'KX3',
+            ix25: 'IX25'
+        };
+
+        if (compactMap[normalized]) {
+            return compactMap[normalized];
+        }
+
+        if (/^[a-z]\d{1,3}[a-z0-9]*$/i.test(normalized)) {
+            return normalized.toUpperCase();
+        }
+
+        if (/^\d+[a-z]+$/i.test(normalized)) {
+            return normalized.toUpperCase();
+        }
+
+        if (/^[a-z0-9-]{2,30}$/i.test(cleaned)) {
+            return cleaned.replace(/-/g, ' ').toUpperCase();
+        }
+
+        return '';
+    }
+
+    stripBrandPrefixFromModelSlug(slug) {
+        const normalized = String(slug || '').trim().toLowerCase();
+        if (!normalized) return '';
+
+        const brandSlugs = Object.keys(this.brandSlugTranslations).sort((a, b) => b.length - a.length);
+        for (const brandSlug of brandSlugs) {
+            if (!normalized.startsWith(brandSlug) || normalized.length <= brandSlug.length) {
+                continue;
+            }
+            const remainder = normalized.slice(brandSlug.length).replace(/^-+/, '');
+            if (remainder && this.isLatinSlugSegment(remainder)) {
+                return remainder;
+            }
+        }
+
+        return '';
+    }
+
+    modelFromSlug(slug) {
+        const normalized = String(slug || '').trim().toLowerCase();
+        if (!normalized) return '';
+        if (this.modelSlugTranslations[normalized]) {
+            return this.modelSlugTranslations[normalized];
+        }
+
+        const stripped = this.stripBrandPrefixFromModelSlug(normalized);
+        if (stripped) {
+            if (this.modelSlugTranslations[stripped]) {
+                return this.modelSlugTranslations[stripped];
+            }
+            const fromStrippedToken = this.formatModelSlugToken(stripped);
+            if (fromStrippedToken) {
+                return fromStrippedToken;
+            }
+        }
+
+        const fromToken = this.formatModelSlugToken(normalized);
+        if (fromToken) {
+            return fromToken;
+        }
+
+        if (/^[a-z0-9-]{2,30}$/.test(normalized)) {
+            return normalized.replace(/-/g, ' ').toUpperCase();
+        }
+        return '';
+    }
+
+    brandFromSlug(slug) {
+        const normalized = String(slug || '').trim().toLowerCase();
+        if (!normalized) return '';
+        if (this.brandSlugTranslations[normalized]) {
+            return this.brandSlugTranslations[normalized];
+        }
+        if (/^[a-z0-9-]{2,30}$/.test(normalized)) {
+            return normalized.replace(/-/g, ' ').toUpperCase();
+        }
+        return '';
+    }
+
+    isLatinSlugSegment(value) {
+        const normalized = String(value || '').trim().toLowerCase();
+        if (!normalized) return false;
+        if (!/^[a-z0-9-]{2,40}$/i.test(normalized)) return false;
+        const reserved = new Set(['list', 'dealer', 'usedcar', 'ershouche']);
+        return !reserved.has(normalized);
+    }
+
+    extractBreadcrumbData($) {
+        const crumbs = [];
+        $('.bread-crumbs.content a').each((_, element) => {
+            const text = $(element).text().replace(/\s+/g, ' ').trim();
+            const href = ($(element).attr('href') || '').trim();
+            if (!text) return;
+            crumbs.push({ text, href });
+        });
+
+        if (crumbs.length === 0) {
+            return {};
+        }
+
+        let brandCn = '';
+        let modelCn = '';
+        let modelSpecCn = '';
+        let brandSlug = '';
+        let modelSlug = '';
+        const ignoredUsedNames = new Set(['车之家', '二手车之家', '二手车']);
+
+        // Обычно в крошках присутствуют "二手{бренд}" и "二手{модель}".
+        for (const crumb of crumbs) {
+            const path = crumb.href.replace(/^https?:\/\/[^/]+/i, '');
+            const pathNoHash = path.split('#')[0].split('?')[0];
+            const segments = pathNoHash.split('/').map(v => v.trim()).filter(Boolean);
+            const brandPathSlug = segments.length >= 2 && this.isLatinSlugSegment(segments[1]) ? segments[1].toLowerCase() : '';
+            const modelPathSlug = segments.length >= 3 && this.isLatinSlugSegment(segments[2]) ? segments[2].toLowerCase() : '';
+
+            const m = crumb.text.match(/^二手(.+)$/u);
+            if (m) {
+                const name = this.normalizeChineseVehicleName(m[1]);
+                if (name && !ignoredUsedNames.has(name)) {
+                    if (!brandCn && brandPathSlug) {
+                        brandCn = name;
+                    } else if (!modelCn && modelPathSlug) {
+                        modelCn = name;
+                    }
+                }
+            }
+
+            // типовой формат: /anshan/richan/xiaoke/s53438/
+            if (!brandSlug && brandPathSlug) {
+                brandSlug = brandPathSlug;
+            }
+            if (!modelSlug && modelPathSlug) {
+                modelSlug = modelPathSlug;
+            }
+        }
+
+        const lastCrumb = crumbs[crumbs.length - 1];
+        if (lastCrumb && lastCrumb.text) {
+            modelSpecCn = this.normalizeChineseVehicleName(lastCrumb.text);
+        }
+
+        return {
+            brand_cn: brandCn || '',
+            model_cn: modelCn || '',
+            model_spec_cn: modelSpecCn || '',
+            brand_slug: brandSlug || '',
+            model_slug: modelSlug || ''
+        };
+    }
+
+    normalizeBrand(apiCar, puppeteerDetails = {}) {
         const brandRaw = (apiCar.BrandName || '').trim();
-        if (!brandRaw) {
-            return apiCar.Brandid ? `BRAND_${apiCar.Brandid}` : 'UNKNOWN';
+        const breadcrumbBrand = (puppeteerDetails.brand_cn || '').trim();
+        const candidates = [breadcrumbBrand, brandRaw].filter(Boolean);
+
+        for (const candidate of candidates) {
+            const fromCache = this.getTranslationFromCache('brand', candidate);
+            if (fromCache) {
+                return fromCache;
+            }
+            if (this.brandTranslations[candidate]) {
+                return this.brandTranslations[candidate];
+            }
+            if (!this.containsNonAscii(candidate)) {
+                return candidate.toUpperCase();
+            }
         }
 
-        if (this.brandTranslations[brandRaw]) {
-            return this.brandTranslations[brandRaw];
-        }
-
-        if (!this.containsNonAscii(brandRaw)) {
-            return brandRaw.toUpperCase();
+        const fromSlug = this.brandFromSlug(puppeteerDetails.brand_slug || '');
+        if (fromSlug) {
+            return fromSlug;
         }
 
         return apiCar.Brandid ? `BRAND_${apiCar.Brandid}` : 'UNKNOWN';
     }
 
-    normalizeModel(apiCar, normalizedBrand) {
+    normalizeModel(apiCar, normalizedBrand, puppeteerDetails = {}) {
         const seriesName = (apiCar.SeriesName || '').trim();
         const carName = (apiCar.carname || '').trim();
         const specName = (apiCar.SpecName || '').trim();
+        const breadcrumbModel = (puppeteerDetails.model_cn || '').trim();
+        const breadcrumbSpec = (puppeteerDetails.model_spec_cn || '').trim();
 
-        const raw = seriesName || carName || specName;
+        const candidates = [
+            breadcrumbModel,
+            breadcrumbSpec,
+            seriesName,
+            carName,
+            specName
+        ].filter(Boolean);
+
+        for (const raw of candidates) {
+            const fromCache = this.getTranslationFromCache('model', raw);
+            if (fromCache) {
+                return fromCache;
+            }
+            for (const [cn, en] of Object.entries(this.modelTranslations)) {
+                if (raw.includes(cn)) {
+                    return en.toUpperCase();
+                }
+            }
+        }
+
+        const fromSlug = this.modelFromSlug(puppeteerDetails.model_slug || '');
+        if (fromSlug) {
+            return fromSlug;
+        }
+
+        const raw = candidates[0] || '';
         if (!raw) {
             return apiCar.Seriesid ? `SERIES_${apiCar.Seriesid}` : 'MODEL_UNKNOWN';
         }
 
-        for (const [cn, en] of Object.entries(this.modelTranslations)) {
-            if (raw.includes(cn) || carName.includes(cn) || seriesName.includes(cn)) {
-                return en.toUpperCase();
-            }
-        }
-
-        let cleaned = raw
-            .replace(/\s+\d{4}款.*$/u, '')
-            .replace(/\s+/g, ' ')
-            .trim();
+        let cleaned = this.normalizeChineseVehicleName(raw);
 
         if (normalizedBrand) {
             cleaned = cleaned.replace(new RegExp(`^${this.escapeRegex(normalizedBrand)}\\s*`, 'i'), '');
         }
-        const brandRaw = (apiCar.BrandName || '').trim();
-        if (brandRaw) {
-            cleaned = cleaned.replace(new RegExp(`^${this.escapeRegex(brandRaw)}\\s*`, 'u'), '');
+        const brandRawCn = (apiCar.BrandName || '').trim();
+        if (brandRawCn) {
+            cleaned = cleaned.replace(new RegExp(`^${this.escapeRegex(brandRawCn)}\\s*`, 'u'), '');
+        }
+
+        const fromCleanedCache = this.getTranslationFromCache('model', cleaned);
+        if (fromCleanedCache) {
+            return fromCleanedCache;
         }
 
         const modelCodeMatch = cleaned.match(/[A-Za-z][A-Za-z0-9\-+]{0,20}/g);
@@ -290,12 +802,209 @@ class Che168Parser {
         if (puppeteerDetails.engineVolume) {
             return String(puppeteerDetails.engineVolume);
         }
-        const text = `${apiCar.carname || ''} ${apiCar.SpecName || ''}`;
-        const m = text.match(/(\d\.\d)\s*L/i);
-        if (m) {
-            return String(Math.round(parseFloat(m[1]) * 1000));
+        if (puppeteerDetails.fuelType === 'E') {
+            return '';
+        }
+        const text = `${apiCar.carname || ''} ${apiCar.SpecName || ''} ${apiCar.power || ''}`;
+        const cc = this.extractEngineVolumeCcFromText(text);
+        if (Number.isFinite(cc)) {
+            return String(cc);
         }
         return '';
+    }
+
+    normalizeLabelText(value) {
+        return String(value || '')
+            .replace(/[\u00A0\s]+/g, '')
+            .trim();
+    }
+
+    normalizeMetricValueText(value) {
+        return String(value || '')
+            .replace(/[，,]/g, '')
+            .replace(/\u3000/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    normalizeHorsepowerValue(value) {
+        const hp = Math.round(Number(value));
+        if (!Number.isFinite(hp) || hp < 20 || hp > 2500) {
+            return null;
+        }
+        return hp;
+    }
+
+    extractHorsepowerFromText(value) {
+        const normalized = this.normalizeMetricValueText(value);
+        if (!normalized) return null;
+
+        const directHpPatterns = [
+            /(\d{2,4}(?:\.\d+)?)\s*(?:马力|匹)(?=[^A-Za-z0-9]|$)/u,
+            /(\d{2,4}(?:\.\d+)?)\s*P[Ss](?=[^A-Za-z0-9]|$)/u
+        ];
+
+        for (const pattern of directHpPatterns) {
+            const match = normalized.match(pattern);
+            if (!match) continue;
+            const hp = this.normalizeHorsepowerValue(match[1]);
+            if (Number.isFinite(hp)) return hp;
+        }
+
+        const kwMatch = normalized.match(/(\d{2,4}(?:\.\d+)?)\s*(?:kW(?!h)|KW(?!h)|千瓦)(?=[^A-Za-z0-9]|$)/u);
+        if (kwMatch) {
+            const kw = Number(kwMatch[1]);
+            if (Number.isFinite(kw) && kw >= 15 && kw <= 1800) {
+                const hp = this.normalizeHorsepowerValue(kw * 1.35962);
+                if (Number.isFinite(hp)) return hp;
+            }
+        }
+
+        return null;
+    }
+
+    extractEngineVolumeCcFromText(value) {
+        const normalized = this.normalizeMetricValueText(value);
+        if (!normalized) return null;
+
+        const ccPatterns = [
+            /(\d{3,5})\s*(?:mL|ML|ml|毫升|cc|CC|cm3|CM3)(?=[^A-Za-z0-9]|$)/u,
+            /排量[^0-9]{0,8}(\d{3,5})(?!\d)/u
+        ];
+
+        for (const pattern of ccPatterns) {
+            const match = normalized.match(pattern);
+            if (!match) continue;
+            const cc = Math.round(Number(match[1]));
+            if (Number.isFinite(cc) && cc >= 600 && cc <= 8500) {
+                return cc;
+            }
+        }
+
+        const literPatterns = [
+            /排量[^0-9]{0,8}(\d+(?:\.\d+)?)\s*(?:L|升|T)(?=[^A-Za-z0-9]|$)/iu,
+            /挡位\s*\/\s*排量[^0-9]{0,16}(?:自动|手动|CVT|AT|MT)?\s*\/\s*(\d+(?:\.\d+)?)\s*(?:L|升|T)(?=[^A-Za-z0-9]|$)/iu,
+            /发动机[^0-9]{0,8}(\d+(?:\.\d+)?)\s*(?:L|升|T)(?=[^A-Za-z0-9]|$)/iu,
+            /(\d+(?:\.\d+)?)\s*(?:L|升|T)(?=[^A-Za-z0-9]|$)/iu
+        ];
+
+        for (const pattern of literPatterns) {
+            const match = normalized.match(pattern);
+            if (!match) continue;
+            const liters = Number(match[1]);
+            if (!Number.isFinite(liters) || liters < 0.6 || liters > 8.5) continue;
+            return Math.round(liters * 1000);
+        }
+
+        return null;
+    }
+
+    extractMileageKmFromText(value) {
+        const normalized = this.normalizeMetricValueText(value);
+        if (!normalized) return null;
+
+        const wanMatch = normalized.match(/(\d+(?:\.\d+)?)\s*万(?:公里|千米|km)?/iu);
+        if (wanMatch) {
+            const mileage = Number(wanMatch[1]) * 10000;
+            return Number.isFinite(mileage) ? Math.round(mileage) : null;
+        }
+
+        const kmMatch = normalized.match(/(\d+(?:\.\d+)?)\s*(?:公里|千米|km)(?=[^A-Za-z0-9]|$)/iu);
+        if (kmMatch) {
+            const mileage = Number(kmMatch[1]);
+            return Number.isFinite(mileage) ? Math.round(mileage) : null;
+        }
+
+        const plainMatch = normalized.match(/^(\d+(?:\.\d+)?)$/u);
+        if (plainMatch) {
+            const numeric = Number(plainMatch[1]);
+            if (!Number.isFinite(numeric) || numeric < 0) return null;
+            if (numeric <= 20) return Math.round(numeric * 10000);
+            return Math.round(numeric);
+        }
+
+        return null;
+    }
+
+    extractHorsepowerFromApi(apiCar) {
+        const source = `${apiCar?.carname || ''} ${apiCar?.SpecName || ''} ${apiCar?.power || ''}`;
+        return this.extractHorsepowerFromText(source);
+    }
+
+    extractMileageKmFromApi(apiCar) {
+        const raw = apiCar?.mileage;
+        if (raw === undefined || raw === null || raw === '') {
+            return '';
+        }
+
+        const text = String(raw).trim();
+        if (!text) return '';
+
+        const byText = this.extractMileageKmFromText(text);
+        if (Number.isFinite(byText)) {
+            return byText;
+        }
+
+        const numeric = parseFloat(text.replace(/,/g, ''));
+        if (!Number.isFinite(numeric) || numeric < 0) {
+            return '';
+        }
+
+        if (text.includes('.')) {
+            return Math.round(numeric * 10000);
+        }
+
+        if (numeric <= 20) {
+            return Math.round(numeric * 10000);
+        }
+
+        return Math.round(numeric);
+    }
+
+    normalizePriceCny(value) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric) || numeric <= 0) {
+            return 0;
+        }
+
+        // START/FINISH/AVG_PRICE stored as VARCHAR(10) in DB.
+        const rounded = Math.round(numeric);
+        const capped = Math.min(9999999999, rounded);
+        return capped >= 0 ? capped : 0;
+    }
+
+    extractYearFromText(value) {
+        const match = String(value || '').match(/(20\d{2}|19\d{2})年/u);
+        if (!match) return null;
+        const year = parseInt(match[1], 10);
+        return Number.isFinite(year) ? year : null;
+    }
+
+    parseStructuredFields($) {
+        const fields = [];
+
+        $('ul.brand-unit-item.fn-clear li').each((_, liElement) => {
+            const label = this.normalizeLabelText($(liElement).find('p').text());
+            const value = $(liElement).find('h4').text().replace(/\s+/g, ' ').trim();
+            if (label && value) {
+                fields.push({ label, value });
+            }
+        });
+
+        $('ul.basic-item-ul li').each((_, liElement) => {
+            const labelRaw = $(liElement).find('span.item-name').first().text();
+            const label = this.normalizeLabelText(labelRaw);
+            if (!label) return;
+
+            const valueNode = $(liElement).clone();
+            valueNode.find('span.item-name').remove();
+            const value = valueNode.text().replace(/\s+/g, ' ').trim();
+            if (!value || value === '-') return;
+
+            fields.push({ label, value });
+        });
+
+        return fields;
     }
 
     normalizeImageList(rawImages) {
@@ -560,7 +1269,7 @@ class Che168Parser {
 
             await page.goto(url, {
                 waitUntil: 'networkidle2',
-                timeout: 60000
+                timeout: this.puppeteerNavTimeoutMs
             });
 
             // Проверяем Security Verification
@@ -591,6 +1300,13 @@ class Che168Parser {
 
             const html = await page.content();
             const details = this.parseDetailsFromHTML(html);
+
+            if (details?.security_blocked) {
+                return { error: 'Security verification blocked' };
+            }
+            if (!this.hasSufficientParsedDetails(details)) {
+                return { error: 'Insufficient parsed details' };
+            }
 
             // Извлекаем изображения из галереи
             details.images = await this.extractGalleryImages(page);
@@ -648,6 +1364,12 @@ class Che168Parser {
         const $ = cheerio.load(html);
         const details = {};
         const bodyText = $('body').text();
+        const breadcrumbData = this.extractBreadcrumbData($);
+
+        if (breadcrumbData && Object.keys(breadcrumbData).length > 0) {
+            Object.assign(details, breadcrumbData);
+            this.log('Parsed breadcrumb data', breadcrumbData);
+        }
 
         this.log(`Parsing HTML, body length: ${bodyText.length} chars`);
 
@@ -705,78 +1427,186 @@ class Che168Parser {
         }
 
         if (priceMatch) {
-            details.price = parseFloat(priceMatch[1]) * 10000;
+            const wanPrice = Number(priceMatch[1]);
+            details.price = this.normalizePriceCny(wanPrice * 10000);
             this.log(`Final price: ${priceMatch[1]}万 = ${details.price} CNY`);
         }
 
-        // Пробег [1]
-        const mileageMatch = bodyText.match(/(\d+\.?\d*)万公里/);
-        if (mileageMatch) {
-            details.mileage = parseFloat(mileageMatch[1]) * 10000;
-            this.log(`Found mileage: ${mileageMatch[1]}万公里 = ${details.mileage} km`);
+        const structuredFields = this.parseStructuredFields($);
+        for (const field of structuredFields) {
+            const label = field.label;
+            const value = field.value;
+
+            if ((label.includes('表显里程') || label === '里程') && !details.mileage) {
+                const mileage = this.extractMileageKmFromText(value);
+                if (Number.isFinite(mileage)) {
+                    details.mileage = mileage;
+                    this.log(`Found mileage from ${label}: ${value} -> ${mileage} km`);
+                }
+            }
+
+            if ((label.includes('上牌时间') || label.includes('登记时间')) && !details.year) {
+                const year = this.extractYearFromText(value);
+                if (year) {
+                    details.year = year;
+                    this.log(`Found year from ${label}: ${year}`);
+                }
+            }
+
+            if ((label.includes('排量') || label.includes('挡位/排量') || label.includes('发动机')) && !details.engineVolume) {
+                const cc = this.extractEngineVolumeCcFromText(`${label} ${value}`);
+                if (Number.isFinite(cc)) {
+                    details.engineVolume = cc;
+                    this.log(`Found engine volume from ${label}: ${value} -> ${cc} cc`);
+                }
+            }
+
+            if ((label.includes('发动机') || label.includes('电动机')) && !details.horsepower) {
+                const hp = this.extractHorsepowerFromText(value);
+                if (Number.isFinite(hp)) {
+                    details.horsepower = hp;
+                    this.log(`Found horsepower from ${label}: ${hp}`);
+                }
+            }
+
+            if ((label.includes('变速箱') || label.includes('挡位')) && !details.transmission) {
+                if (/CVT/i.test(value)) details.transmission = 'CVT';
+                else if (/手动|MT/i.test(value)) details.transmission = 'MT';
+                else if (/自动|AT|DCT|DSG|PDK/i.test(value)) details.transmission = 'AT';
+            }
+
+            if ((label.includes('驱动方式') || label === '驱动') && !details.drive) {
+                if (/四驱|4WD|AWD/u.test(value)) details.drive = '4WD';
+                else if (/后驱|RWD|FR/u.test(value)) details.drive = 'FR';
+                else if (/前驱|两驱|FWD|FF/u.test(value)) details.drive = 'FF';
+            }
+
+            if ((label.includes('燃油标号') || label.includes('燃油类型') || label.includes('能源类型')) && !details.fuelType) {
+                if (/插电|增程|PHEV/u.test(value)) details.fuelType = 'P';
+                else if (/混动|双擎|混合动力|HEV|HYBRID/u.test(value)) details.fuelType = 'H';
+                else if (/纯电|电动|EV/u.test(value)) details.fuelType = 'E';
+                else if (/柴油/u.test(value)) details.fuelType = 'D';
+                else if (/汽油|92号|95号|98号/u.test(value)) details.fuelType = 'G';
+            }
+
+            if ((label.includes('车身颜色') || label === '颜色') && !details.color) {
+                const colorMatch = value.match(/(白色|黑色|银色|灰色|蓝色|红色|棕色|金色|绿色|黄色)/u);
+                if (colorMatch) {
+                    details.color = colorMatch[1];
+                    details.color_en = this.colorTranslations[colorMatch[1]] || colorMatch[1];
+                }
+            }
+
+            if (label.includes('标准容量') && !details.batteryKwh) {
+                const batteryMatch = value.match(/(\d+(?:\.\d+)?)\s*kwh/i);
+                if (batteryMatch) {
+                    details.batteryKwh = parseFloat(batteryMatch[1]);
+                    details.fuelType = details.fuelType || 'E';
+                    this.log(`Found battery capacity from ${label}: ${details.batteryKwh} kWh`);
+                }
+            }
         }
 
-        // Год [1]
-        const yearMatch = bodyText.match(/(202\d|201\d)年/);
-        if (yearMatch) {
-            details.year = parseInt(yearMatch[1]);
-            this.log(`Found year: ${details.year}`);
+        if (!details.horsepower) {
+            const horsepowerContext =
+                bodyText.match(/(?:发动机|电动机|最大马力|综合马力|马力|功率)[\s\S]{0,96}/u)?.[0] || '';
+            const hp = this.extractHorsepowerFromText(horsepowerContext);
+            if (Number.isFinite(hp)) {
+                details.horsepower = hp;
+                this.log(`Found horsepower: ${details.horsepower}`);
+            }
         }
 
-        // Цвет
-        const colorMatch = bodyText.match(/(白色|黑色|银色|灰色|蓝色|红色|棕色|金色|绿色|黄色)/);
-        if (colorMatch) {
-            details.color = colorMatch[1];
-            details.color_en = this.colorTranslations[colorMatch[1]] || colorMatch[1];
-            this.log(`Found color: ${details.color} (${details.color_en})`);
+        if (!details.mileage) {
+            const mileageContext =
+                bodyText.match(/(?:表显里程|里程)[\s:：]*[0-9.,，]+(?:\.[0-9]+)?\s*(?:万)?\s*(?:公里|千米|km)?/iu)?.[0]
+                || bodyText.match(/[0-9]+(?:\.[0-9]+)?\s*万公里/u)?.[0]
+                || '';
+            const mileage = this.extractMileageKmFromText(mileageContext);
+            if (Number.isFinite(mileage)) {
+                details.mileage = mileage;
+                this.log(`Found mileage fallback: ${mileageContext} = ${details.mileage} km`);
+            }
         }
 
-        // Объем двигателя
-        const engineMatch = bodyText.match(/(\d\.\d)\s*L/i);
-        if (engineMatch) {
-            details.engineVolume = Math.round(parseFloat(engineMatch[1]) * 1000);
-            this.log(`Found engine volume: ${engineMatch[1]}L = ${details.engineVolume} cc`);
+        if (!details.year) {
+            const yearMatch = bodyText.match(/上牌时间[\s:：]*(20\d{2}|19\d{2})年/u) || bodyText.match(/(20\d{2}|19\d{2})年/u);
+            if (yearMatch) {
+                details.year = parseInt(yearMatch[1], 10);
+                this.log(`Found year: ${details.year}`);
+            }
         }
 
-        // Трансмиссия [1]
-        if (bodyText.includes('自动')) {
-            details.transmission = 'AT';
-            this.log(`Found transmission: AT`);
-        } else if (bodyText.includes('手动')) {
-            details.transmission = 'MT';
-            this.log(`Found transmission: MT`);
-        } else if (bodyText.includes('CVT')) {
-            details.transmission = 'CVT';
-            this.log(`Found transmission: CVT`);
+        if (!details.color) {
+            const colorMatch = bodyText.match(/(白色|黑色|银色|灰色|蓝色|红色|棕色|金色|绿色|黄色)/u);
+            if (colorMatch) {
+                details.color = colorMatch[1];
+                details.color_en = this.colorTranslations[colorMatch[1]] || colorMatch[1];
+                this.log(`Found color: ${details.color} (${details.color_en})`);
+            }
         }
 
-        // Привод
-        if (bodyText.includes('四驱') || bodyText.includes('4WD') || bodyText.includes('AWD')) {
-            details.drive = '4WD';
-        } else if (bodyText.includes('后驱') || bodyText.includes('RWD') || bodyText.includes('FR')) {
-            details.drive = 'FR';
-        } else if (bodyText.includes('前驱') || bodyText.includes('两驱') || bodyText.includes('FWD') || bodyText.includes('FF')) {
-            details.drive = 'FF';
+        if (!details.engineVolume) {
+            const engineContext =
+                bodyText.match(/(?:挡位\s*\/\s*排量|排量|发动机|电动机)[\s\S]{0,96}/u)?.[0] || '';
+            const cc = this.extractEngineVolumeCcFromText(engineContext);
+            if (Number.isFinite(cc)) {
+                details.engineVolume = cc;
+                this.log(`Found engine volume fallback: ${engineContext} -> ${details.engineVolume} cc`);
+            }
         }
 
-        // Тип топлива (строго по "энергетическим" ключам, чтобы не ловить ложные "电动座椅")
-        const energyBlock = bodyText.match(/(能源类型|燃料类型|动力类型).{0,24}/u)?.[0] || '';
-        const fuelSourceText = `${energyBlock} ${bodyText.substring(0, 4000)}`;
-        if (/插电式混合|增程/u.test(fuelSourceText)) {
-            details.fuelType = 'P';
-            this.log('Found fuel type: P (plug-in hybrid)');
-        } else if (/油电混合|混合动力|双擎/u.test(fuelSourceText)) {
-            details.fuelType = 'H';
-            this.log('Found fuel type: H (hybrid)');
-        } else if (/纯电|新能源/u.test(energyBlock)) {
-            details.fuelType = 'E';
-            this.log('Found fuel type: E (electric)');
-        } else if (/柴油/u.test(fuelSourceText)) {
-            details.fuelType = 'D';
-            this.log('Found fuel type: D (diesel)');
-        } else if (/汽油/u.test(fuelSourceText)) {
-            details.fuelType = 'G';
-            this.log('Found fuel type: G (petrol)');
+        if (!details.transmission) {
+            if (bodyText.includes('CVT')) {
+                details.transmission = 'CVT';
+                this.log('Found transmission: CVT');
+            } else if (bodyText.includes('自动')) {
+                details.transmission = 'AT';
+                this.log('Found transmission: AT');
+            } else if (bodyText.includes('手动')) {
+                details.transmission = 'MT';
+                this.log('Found transmission: MT');
+            }
+        }
+
+        if (!details.drive) {
+            if (bodyText.includes('四驱') || bodyText.includes('4WD') || bodyText.includes('AWD')) {
+                details.drive = '4WD';
+            } else if (bodyText.includes('后驱') || bodyText.includes('RWD') || bodyText.includes('FR')) {
+                details.drive = 'FR';
+            } else if (bodyText.includes('前驱') || bodyText.includes('两驱') || bodyText.includes('FWD') || bodyText.includes('FF')) {
+                details.drive = 'FF';
+            }
+        }
+
+        if (!details.fuelType) {
+            const energyBlock = bodyText.match(/(能源类型|燃料类型|动力类型).{0,24}/u)?.[0] || '';
+            const fuelSourceText = `${energyBlock} ${bodyText.substring(0, 4000)}`;
+            if (/插电式混合|增程/u.test(fuelSourceText)) {
+                details.fuelType = 'P';
+                this.log('Found fuel type: P (plug-in hybrid)');
+            } else if (/油电混合|混合动力|双擎/u.test(fuelSourceText)) {
+                details.fuelType = 'H';
+                this.log('Found fuel type: H (hybrid)');
+            } else if (/纯电|新能源|电动|标准容量/u.test(fuelSourceText)) {
+                details.fuelType = 'E';
+                this.log('Found fuel type: E (electric)');
+            } else if (/柴油/u.test(fuelSourceText)) {
+                details.fuelType = 'D';
+                this.log('Found fuel type: D (diesel)');
+            } else if (/汽油|92号|95号|98号/u.test(fuelSourceText)) {
+                details.fuelType = 'G';
+                this.log('Found fuel type: G (petrol)');
+            }
+        }
+
+        if (!details.batteryKwh) {
+            const batteryMatch = bodyText.match(/标准容量[\s:：]*([0-9]+(?:\.[0-9]+)?)\s*kwh/i);
+            if (batteryMatch) {
+                details.batteryKwh = parseFloat(batteryMatch[1]);
+                details.fuelType = details.fuelType || 'E';
+                this.log(`Found battery capacity fallback: ${details.batteryKwh} kWh`);
+            }
         }
 
         return details;
@@ -785,9 +1615,45 @@ class Che168Parser {
     // Преобразование данных автомобиля в формат для базы данных
     async prepareCarData(apiCar, puppeteerDetails) {
         try {
+            await this.ensureTranslationCacheLoaded();
+            const normalizedDetails = puppeteerDetails || {};
+
             // Применяем нормализацию бренда/модели без иероглифов.
-            const brandEnglish = this.normalizeBrand(apiCar);
-            const modelEnglish = this.normalizeModel(apiCar, brandEnglish);
+            let brandEnglish = this.normalizeBrand(apiCar, normalizedDetails);
+            const brandSource = String(normalizedDetails.brand_cn || apiCar.BrandName || '').trim();
+            if (
+                (/^BRAND_/i.test(brandEnglish) || /^UNKNOWN$/i.test(brandEnglish) || this.containsNonAscii(brandEnglish))
+                && brandSource
+            ) {
+                const translatedBrand = await this.translateNameWithDeepSeek(brandSource, { kind: 'brand' });
+                if (translatedBrand) {
+                    brandEnglish = translatedBrand;
+                }
+            }
+
+            let modelEnglish = this.normalizeModel(apiCar, brandEnglish, normalizedDetails);
+            const modelSource = String(
+                normalizedDetails.model_cn
+                || normalizedDetails.model_spec_cn
+                || apiCar.SeriesName
+                || apiCar.carname
+                || apiCar.SpecName
+                || ''
+            ).trim();
+            if (
+                (
+                    /^SERIES_/i.test(modelEnglish)
+                    || /^MODEL_UNKNOWN$/i.test(modelEnglish)
+                    || this.containsNonAscii(modelEnglish)
+                    || (String(modelEnglish || '').trim().length <= 1 && this.containsNonAscii(modelSource))
+                )
+                && modelSource
+            ) {
+                const translatedModel = await this.translateNameWithDeepSeek(modelSource, { kind: 'model' });
+                if (translatedModel) {
+                    modelEnglish = translatedModel;
+                }
+            }
 
             // Генерация ID [2]
             const carId = this.generateCarId(
@@ -799,13 +1665,21 @@ class Che168Parser {
                 apiCar.price
             );
 
-            const fuelType = this.inferFuelType(apiCar, puppeteerDetails);
-            const transmission = this.inferTransmission(apiCar, puppeteerDetails);
-            const drive = this.inferDrive(apiCar, puppeteerDetails);
-            const engineCc = this.extractEngineCc(apiCar, puppeteerDetails);
-            const imageList = this.normalizeImageList(puppeteerDetails.images || apiCar.image || '');
+            const fuelType = this.inferFuelType(apiCar, normalizedDetails);
+            const transmission = this.inferTransmission(apiCar, normalizedDetails);
+            const drive = this.inferDrive(apiCar, normalizedDetails);
+            const engineCc = this.extractEngineCc(apiCar, normalizedDetails);
+            const horsepower = Number.isFinite(Number(normalizedDetails.horsepower))
+                ? Math.round(Number(normalizedDetails.horsepower))
+                : this.extractHorsepowerFromApi(apiCar);
+            const imageList = this.normalizeImageList(normalizedDetails.images || apiCar.image || '');
             const localizedImages = await this.localizeImages(imageList, brandEnglish, modelEnglish, carId);
-            const basePrice = puppeteerDetails.price ? puppeteerDetails.price : (parseFloat(apiCar.price) * 10000);
+            const parsedDetailsPrice = this.normalizePriceCny(normalizedDetails.price);
+            const apiPrice = this.normalizePriceCny(parseFloat(apiCar.price) * 10000);
+            const basePrice = parsedDetailsPrice > 0 ? parsedDetailsPrice : apiPrice;
+            const mileageKm = Number.isFinite(Number(normalizedDetails.mileage))
+                ? Math.round(Number(normalizedDetails.mileage))
+                : this.extractMileageKmFromApi(apiCar);
 
             // Формируем данные в формате CarModel [2]
             const carData = {
@@ -815,25 +1689,25 @@ class Che168Parser {
                 MARKA_NAME: brandEnglish,
                 MODEL_ID: '',
                 MODEL_NAME: modelEnglish,
-                YEAR: puppeteerDetails.year || apiCar.registrationdate || '',
+                YEAR: normalizedDetails.year || apiCar.registrationdate || '',
                 TOWN: apiCar.cname || '',
                 ENG_V: engineCc,
-                PW: puppeteerDetails.horsepower ? puppeteerDetails.horsepower.toString() : '',
+                PW: Number.isFinite(horsepower) ? String(horsepower) : '',
                 KUZOV: '',
                 GRADE: '',
-                COLOR: puppeteerDetails.color_en || puppeteerDetails.color || '',
+                COLOR: normalizedDetails.color_en || normalizedDetails.color || '',
                 KPP: transmission,
                 KPP_TYPE: transmission,
                 PRIV: drive,
-                MILEAGE: puppeteerDetails.mileage ? puppeteerDetails.mileage.toString() : (parseFloat(apiCar.mileage) * 10000).toString(),
+                MILEAGE: mileageKm !== '' ? String(mileageKm) : '',
                 EQUIP: '',
                 RATE: '',
-                START: basePrice.toString(),
-                FINISH: basePrice.toString(),
+                START: String(basePrice),
+                FINISH: String(basePrice),
                 STATUS: 'available',
                 TIME: fuelType,
                 SANCTION: '',
-                AVG_PRICE: basePrice.toString(),
+                AVG_PRICE: String(basePrice),
                 AVG_STRING: '',
                 IMAGES: localizedImages.join('#'),
                 PRICE_CALC: null,
@@ -930,12 +1804,30 @@ class Che168Parser {
         try {
             this.log(`Processing car: ${apiCar.carname} (ID: ${apiCar.carid})`);
 
-            // Получаем детальную информацию через Puppeteer
-            const puppeteerDetails = await this.parseCarDetailsWithPuppeteer(apiCar.carid);
+            // Получаем детальную информацию через Puppeteer с ретраями при сетевых сбоях.
+            let puppeteerDetails = null;
+            for (let attempt = 1; attempt <= this.puppeteerMaxAttempts; attempt++) {
+                if (attempt > 1) {
+                    this.log(`Puppeteer retry ${attempt}/${this.puppeteerMaxAttempts} for car ${apiCar.carid}`);
+                }
 
-            if (puppeteerDetails.error) {
-                this.log(`Skipping car ${apiCar.carid} due to Puppeteer error:`, puppeteerDetails.error);
-                return false;
+                puppeteerDetails = await this.parseCarDetailsWithPuppeteer(apiCar.carid);
+                if (puppeteerDetails && !puppeteerDetails.error) {
+                    break;
+                }
+
+                const errorMessage = puppeteerDetails?.error || 'unknown puppeteer error';
+                const shouldRetry = this.isRetryablePuppeteerError(errorMessage);
+                const hasAttemptsLeft = attempt < this.puppeteerMaxAttempts;
+
+                if (!shouldRetry || !hasAttemptsLeft) {
+                    this.log(`Skipping car ${apiCar.carid} due to Puppeteer error:`, errorMessage);
+                    return false;
+                }
+
+                const retryDelayMs = this.getRetryDelayMs(attempt);
+                this.log(`Transient Puppeteer error for car ${apiCar.carid}. Retry in ${retryDelayMs} ms`, errorMessage);
+                await this.sleep(retryDelayMs);
             }
 
             // Подготавливаем данные для базы
