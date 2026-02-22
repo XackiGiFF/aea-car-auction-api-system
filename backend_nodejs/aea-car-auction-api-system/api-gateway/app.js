@@ -92,7 +92,7 @@ class CarAuctionApp {
         this.server = this.app.listen(this.port, () => {
             console.log(`🚀 Server running on port ${this.port}`);
             console.log(`📊 API available at http://localhost:${this.port}/api`);
-            console.log(`❤️  Health check at http://localhost:${this.port}/health`);
+            console.log(`❤️  Health check at http://localhost:${this.port}/api/health`);
         });
     }
 
