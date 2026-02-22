@@ -115,6 +115,7 @@ services:
     volumes:
       - ../../che-parser-bot:/app
       - /app/node_modules
+      - che_parser_data:/app/data
     env_file:
       - ../../che-parser-bot/.env
     environment:
@@ -182,3 +183,4 @@ services:
 
 volumes:
   cdn_media_data:
+  che_parser_data:

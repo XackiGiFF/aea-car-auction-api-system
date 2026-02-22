@@ -2,6 +2,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const puppeteer = require('puppeteer');
 const crypto = require('crypto');
+const fsSync = require('fs');
 const fs = require('fs/promises');
 const path = require('path');
 require('dotenv').config();
@@ -27,7 +28,7 @@ class Che168Parser {
         this.purgeDeletedEnabled = String(process.env.PURGE_DELETED_ENABLED || 'true').toLowerCase() === 'true';
         this.purgeDeletedAfterHours = Number(process.env.PURGE_DELETED_AFTER_HOURS || 48);
         this.purgeDeletedBatchSize = Number(process.env.PURGE_DELETED_BATCH_SIZE || 5000);
-        this.puppeteerMaxAttempts = Math.max(1, Number(process.env.CHE_PUPPETEER_MAX_ATTEMPTS || 3));
+        this.puppeteerMaxAttempts = Math.max(1, Number(process.env.CHE_PUPPETEER_MAX_ATTEMPTS || 8));
         this.puppeteerRetryDelayMs = Math.max(1000, Number(process.env.CHE_PUPPETEER_RETRY_DELAY_MS || 5000));
         this.puppeteerRetryMaxDelayMs = Math.max(
             this.puppeteerRetryDelayMs,
@@ -60,201 +61,13 @@ class Che168Parser {
             'If exact English equivalent is unknown, return pinyin transliteration in uppercase.'
         ].join(' ');
 
-        // Словарь для перевода китайских марок на английские
-        this.brandTranslations = {
-            '丰田': 'TOYOTA',
-            '本田': 'HONDA',
-            '马自达': 'MAZDA',
-            '奥迪': 'AUDI',
-            '大众': 'VOLKSWAGEN',
-            '宝马': 'BMW',
-            '奔驰': 'MERCEDES',
-            '斯柯达': 'SKODA',
-            '日产': 'NISSAN',
-            '现代': 'HYUNDAI',
-            '起亚': 'KIA',
-            '吉利汽车': 'GEELY',
-            '哈弗': 'HAVAL',
-            '奇瑞': 'CHERY',
-            '斯巴鲁': 'SUBARU',
-            '长安': 'CHANGAN',
-            '比亚迪': 'BYD',
-            '特斯拉': 'TESLA',
-            '福特': 'FORD',
-            '雪佛兰': 'CHEVROLET',
-            '别克': 'BUICK',
-            '雷克萨斯': 'LEXUS',
-            '长安启源': 'CHANGAN QIYUAN',
-            '领克': 'LYNK&CO'
-        };
-
-        // Fallback по slug из breadcrumbs (например /anshan/richan/xiaoke/)
-        this.brandSlugTranslations = {
-            'fengtian': 'TOYOTA',
-            'bentian': 'HONDA',
-            'mazida': 'MAZDA',
-            'aodi': 'AUDI',
-            'dazhong': 'VOLKSWAGEN',
-            'baoma': 'BMW',
-            'benchi': 'MERCEDES',
-            'riben': 'NISSAN',
-            'richan': 'NISSAN',
-            'sikeda': 'SKODA',
-            'hafu': 'HAVAL',
-            'xiandai': 'HYUNDAI',
-            'beijingxiandai': 'HYUNDAI',
-            'qiya': 'KIA',
-            'jili': 'GEELY',
-            'jiliqiche': 'GEELY',
-            'changan': 'CHANGAN',
-            'changanqiyuan': 'CHANGAN QIYUAN',
-            'qirui': 'CHERY',
-            'sibalu': 'SUBARU',
-            'fute': 'FORD',
-            'xuefulan': 'CHEVROLET',
-            'bieke': 'BUICK',
-            'leikesasi': 'LEXUS',
-            'tesila': 'TESLA',
-            'biyadi': 'BYD'
-        };
-
-        // Словарь для перевода моделей
-        this.modelTranslations = {
-            'CX-30': 'CX-30',
-            'CX-5': 'CX-5',
-            'XR-V': 'XR-V',
-            'A3': 'A3',
-            '奥迪A3': 'A3',
-            '奥迪Q2L': 'Q2L',
-            '奥迪Q3': 'Q3',
-            '宝马X1': 'X1',
-            '宝马1系': '1 SERIES',
-            '宝马3系': '3 SERIES',
-            '本田XR-V': 'XR-V',
-            'T-ROC探歌': 'T-ROC',
-            '高尔夫': 'GOLF',
-            '探影': 'TACQUA',
-            '雷凌': 'LEVIN',
-            '卡罗拉': 'COROLLA',
-            'YARiS L 致炫': 'YARIS L',
-            '雅阁': 'ACCORD',
-            '思域': 'CIVIC',
-            'CR-V': 'CR-V',
-            '途观': 'TIGUAN',
-            '途岳': 'THARU',
-            '帕萨特': 'PASSAT',
-            '朗逸': 'LAVIDA',
-            '速腾': 'SAGITAR',
-            '探歌': 'T-ROC',
-            '昂克赛拉': 'AXELA',
-            '马自达3 昂克赛拉': 'AXELA',
-            '马自达CX-5': 'CX-5',
-            '马自达CX-30': 'CX-30',
-            '探岳': 'TAYRON',
-            '森林人': 'FORESTER',
-            '明锐': 'OCTAVIA',
-            '柯米克': 'KAMIQ',
-            '柯珞克': 'KAROQ',
-            '雷克萨斯NX': 'NX',
-            '哈弗M6': 'M6',
-            '哈弗H6': 'H6',
-            '缤智': 'VEZEL',
-            '凌渡': 'LAMANDO',
-            '缤越': 'COOLRAY',
-            '奕跑': 'STONIC',
-            '伊兰特': 'ELANTRA',
-            '北京现代ix25': 'IX25',
-            '起亚K3': 'K3',
-            'KX3傲跑': 'KX3',
-            '飞度': 'FIT',
-            '逍客': 'QASHQAI',
-            '奇骏': 'X-TRAIL',
-            '轩逸': 'SYLPHY',
-            '天籁': 'TEANA',
-            '迈腾': 'MAGOTAN',
-            '宝来': 'BORA',
-            '雅力士': 'YARIS',
-            '奔驰A级': 'A-CLASS',
-            '瑞虎3x': 'TIGGO 3X',
-            '长安CS35PLUS': 'CS35 PLUS',
-            '长安启源A06': 'A06'
-        };
-
-        // Fallback для model slug из breadcrumbs
-        this.modelSlugTranslations = {
-            'aodia3': 'A3',
-            'aodiq2l': 'Q2L',
-            'aodiq3': 'Q3',
-            'baoma1xi': '1 SERIES',
-            'baoma3xi': '3 SERIES',
-            'baomax1': 'X1',
-            'bentianxrv': 'XR-V',
-            'troctange': 'T-ROC',
-            'leikesasinx': 'NX',
-            'mazida3angkesaila': 'AXELA',
-            'mazidacx5': 'CX-5',
-            'mazidacx30': 'CX-30',
-            'hafum6': 'M6',
-            'hafuh6': 'H6',
-            'xiaoke': 'QASHQAI',
-            'qijun': 'X-TRAIL',
-            'xuanyi': 'SYLPHY',
-            'tianlai': 'TEANA',
-            'leiling': 'LEVIN',
-            'kaluola': 'COROLLA',
-            'langyi': 'LAVIDA',
-            'gaoerfu': 'GOLF',
-            'tuyue': 'THARU',
-            'yilante': 'ELANTRA',
-            'ix25': 'IX25',
-            'beijingxiandaiix25': 'IX25',
-            'sagitar': 'SAGITAR',
-            'lingdu': 'LAMANDO',
-            'mingrui': 'OCTAVIA',
-            'binzhi': 'VEZEL',
-            'binyue': 'COOLRAY',
-            'yipao': 'STONIC',
-            'maiteng': 'MAGOTAN',
-            'bora': 'BORA',
-            'tuguan': 'TIGUAN',
-            'tanyue': 'TAYRON',
-            'tanying': 'TACQUA',
-            'kemike': 'KAMIQ',
-            'keluoke': 'KAROQ',
-            'ruihu3x': 'TIGGO 3X',
-            'changancs35plus': 'CS35 PLUS',
-            'changanqiyuana06': 'A06',
-            'qiyak3': 'K3',
-            'kx3aopao': 'KX3',
-            'feidu': 'FIT',
-            'siyu': 'CIVIC',
-            'yarislzhixuan': 'YARIS L',
-            'yarisl': 'YARIS L',
-            'civic': 'CIVIC',
-            'accord': 'ACCORD',
-            'camry': 'CAMRY',
-            'cr-v': 'CR-V',
-            'xrv': 'XR-V',
-            'x1': 'X1',
-            'q2l': 'Q2L',
-            'q3': 'Q3',
-            'cx5': 'CX-5',
-            'cx30': 'CX-30',
-            'cx-5': 'CX-5',
-            'cx-30': 'CX-30',
-            'vezel': 'VEZEL'
-        };
-
-        // Нормативный словарь: brand slug -> BRAND + вложенные model slugs.
-        this.brandAndModels = this.buildBrandAndModelsConfig();
-        this.brandSlugTranslations = {
-            ...this.brandSlugTranslations,
-            ...this.buildBrandMapFromBrandAndModels(this.brandAndModels)
-        };
-        this.modelSlugTranslations = {
-            ...this.modelSlugTranslations,
-            ...this.buildModelMapFromBrandAndModels(this.brandAndModels)
-        };
+        this.translationSeedFile = process.env.CHE_TRANSLATION_SEED_FILE
+            || path.join(__dirname, '..', 'config', 'translations.seed.json');
+        const translationSeed = this.loadTranslationSeed();
+        this.brandTranslations = translationSeed.brand;
+        this.modelTranslations = translationSeed.model;
+        this.brandSlugTranslations = translationSeed.brand_slug;
+        this.modelSlugTranslations = translationSeed.model_slug;
 
         // Маппинг цветов
         this.colorTranslations = {
@@ -358,196 +171,48 @@ class Che168Parser {
         return signals.some((field) => details[field] !== undefined && details[field] !== null && details[field] !== '');
     }
 
-    buildBrandAndModelsConfig() {
-        return {
-            aodi: {
-                brand: 'AUDI',
-                aliases: ['audi'],
-                models: {
-                    aodia3: 'A3',
-                    aodiq2l: 'Q2L',
-                    aodiq3: 'Q3'
-                }
-            },
-            bentian: {
-                brand: 'HONDA',
-                aliases: ['honda'],
-                models: {
-                    bentianxrv: 'XR-V',
-                    binzhi: 'VEZEL',
-                    siyu: 'CIVIC',
-                    feidu: 'FIT'
-                }
-            },
-            mazida: {
-                brand: 'MAZDA',
-                aliases: ['mazda'],
-                models: {
-                    mazida3angkesaila: 'AXELA',
-                    mazidacx5: 'CX-5',
-                    mazidacx30: 'CX-30'
-                }
-            },
-            dazhong: {
-                brand: 'VOLKSWAGEN',
-                aliases: ['volkswagen', 'vw'],
-                models: {
-                    troctange: 'T-ROC',
-                    gaoerfu: 'GOLF',
-                    tanying: 'TACQUA',
-                    tanyue: 'TAYRON',
-                    tuyue: 'THARU',
-                    tuguan: 'TIGUAN',
-                    lingdu: 'LAMANDO',
-                    sagitar: 'SAGITAR',
-                    bora: 'BORA',
-                    langyi: 'LAVIDA',
-                    maiteng: 'MAGOTAN'
-                }
-            },
-            baoma: {
-                brand: 'BMW',
-                aliases: ['bmw'],
-                models: {
-                    baomax1: 'X1',
-                    baoma1xi: '1 SERIES',
-                    baoma3xi: '3 SERIES'
-                }
-            },
-            sikeda: {
-                brand: 'SKODA',
-                aliases: ['skoda'],
-                models: {
-                    mingrui: 'OCTAVIA',
-                    kemike: 'KAMIQ',
-                    keluoke: 'KAROQ'
-                }
-            },
-            richan: {
-                brand: 'NISSAN',
-                aliases: ['riben', 'nissan'],
-                models: {
-                    xiaoke: 'QASHQAI',
-                    qijun: 'X-TRAIL',
-                    xuanyi: 'SYLPHY',
-                    tianlai: 'TEANA'
-                }
-            },
-            fengtian: {
-                brand: 'TOYOTA',
-                aliases: ['toyota'],
-                models: {
-                    kaluola: 'COROLLA',
-                    leiling: 'LEVIN',
-                    yarisl: 'YARIS L',
-                    yarislzhixuan: 'YARIS L'
-                }
-            },
-            leikesasi: {
-                brand: 'LEXUS',
-                aliases: ['lexus'],
-                models: {
-                    leikesasinx: 'NX'
-                }
-            },
-            xiandai: {
-                brand: 'HYUNDAI',
-                aliases: ['hyundai', 'beijingxiandai'],
-                models: {
-                    yilante: 'ELANTRA',
-                    ix25: 'IX25',
-                    beijingxiandaiix25: 'IX25'
-                }
-            },
-            qiya: {
-                brand: 'KIA',
-                aliases: ['kia'],
-                models: {
-                    qiyak3: 'K3',
-                    kx3aopao: 'KX3',
-                    yipao: 'STONIC'
-                }
-            },
-            hafu: {
-                brand: 'HAVAL',
-                aliases: ['haval'],
-                models: {
-                    hafum6: 'M6',
-                    hafuh6: 'H6'
-                }
-            },
-            jiliqiche: {
-                brand: 'GEELY',
-                aliases: ['jili', 'geely'],
-                models: {
-                    binyue: 'COOLRAY'
-                }
-            },
-            changan: {
-                brand: 'CHANGAN',
-                aliases: ['changan'],
-                models: {
-                    changancs35plus: 'CS35 PLUS'
-                }
-            },
-            changanqiyuan: {
-                brand: 'CHANGAN QIYUAN',
-                aliases: ['qiyuan'],
-                models: {
-                    changanqiyuana06: 'A06'
-                }
-            },
-            qirui: {
-                brand: 'CHERY',
-                aliases: ['chery'],
-                models: {
-                    ruihu3x: 'TIGGO 3X'
-                }
-            },
-            sibalu: {
-                brand: 'SUBARU',
-                aliases: ['subaru'],
-                models: {}
-            },
-            benchi: {
-                brand: 'MERCEDES',
-                aliases: ['benz', 'mercedes'],
-                models: {}
-            }
+    loadTranslationSeed() {
+        const empty = {
+            brand: {},
+            model: {},
+            brand_slug: {},
+            model_slug: {}
         };
-    }
 
-    buildBrandMapFromBrandAndModels(config = {}) {
-        const map = {};
-        for (const [brandSlug, brandConfig] of Object.entries(config || {})) {
-            const brand = String(brandConfig?.brand || '').trim().toUpperCase();
-            if (!brand) continue;
+        try {
+            const raw = fsSync.readFileSync(this.translationSeedFile, 'utf8');
+            const parsed = JSON.parse(raw || '{}');
 
-            map[String(brandSlug).toLowerCase()] = brand;
-            const aliases = Array.isArray(brandConfig.aliases) ? brandConfig.aliases : [];
-            for (const alias of aliases) {
-                const normalizedAlias = String(alias || '').trim().toLowerCase();
-                if (normalizedAlias) {
-                    map[normalizedAlias] = brand;
+            const normalizeMap = (input, options = {}) => {
+                const source = input && typeof input === 'object' ? input : {};
+                const result = {};
+                const keyFormatter = options.keyFormatter || ((v) => String(v || '').trim());
+                const valueFormatter = options.valueFormatter || ((v) => String(v || '').trim().toUpperCase());
+
+                for (const [rawKey, rawValue] of Object.entries(source)) {
+                    const key = keyFormatter(rawKey);
+                    const value = valueFormatter(rawValue);
+                    if (!key || !value) continue;
+                    result[key] = value;
                 }
-            }
-        }
-        return map;
-    }
 
-    buildModelMapFromBrandAndModels(config = {}) {
-        const map = {};
-        for (const brandConfig of Object.values(config || {})) {
-            const models = brandConfig?.models || {};
-            for (const [modelSlug, modelName] of Object.entries(models)) {
-                const slug = String(modelSlug || '').trim().toLowerCase();
-                const name = String(modelName || '').trim().toUpperCase();
-                if (slug && name) {
-                    map[slug] = name;
-                }
-            }
+                return result;
+            };
+
+            return {
+                brand: normalizeMap(parsed.brand),
+                model: normalizeMap(parsed.model),
+                brand_slug: normalizeMap(parsed.brand_slug, {
+                    keyFormatter: (v) => String(v || '').trim().toLowerCase()
+                }),
+                model_slug: normalizeMap(parsed.model_slug, {
+                    keyFormatter: (v) => String(v || '').trim().toLowerCase()
+                })
+            };
+        } catch (error) {
+            console.error(`[CHE168] Failed to load translation seed ${this.translationSeedFile}: ${error.message}`);
+            return empty;
         }
-        return map;
     }
 
     shouldUseDeepSeek() {
@@ -575,12 +240,20 @@ class Che168Parser {
         }
 
         this.translationCacheLoadingPromise = (async () => {
+            const seedBrand = this.brandTranslations || {};
+            const seedModel = this.modelTranslations || {};
             try {
                 const raw = await fs.readFile(this.translationCacheFile, 'utf8');
                 const parsed = JSON.parse(raw || '{}');
                 this.translationFileCache = {
-                    brand: parsed?.brand && typeof parsed.brand === 'object' ? parsed.brand : {},
-                    model: parsed?.model && typeof parsed.model === 'object' ? parsed.model : {}
+                    brand: {
+                        ...seedBrand,
+                        ...(parsed?.brand && typeof parsed.brand === 'object' ? parsed.brand : {})
+                    },
+                    model: {
+                        ...seedModel,
+                        ...(parsed?.model && typeof parsed.model === 'object' ? parsed.model : {})
+                    }
                 };
                 this.log('Loaded translation cache file', {
                     file: this.translationCacheFile,
@@ -588,7 +261,19 @@ class Che168Parser {
                     model_entries: Object.keys(this.translationFileCache.model).length
                 });
             } catch (error) {
-                if (error.code !== 'ENOENT') {
+                this.translationFileCache = {
+                    brand: { ...seedBrand },
+                    model: { ...seedModel }
+                };
+
+                if (error.code === 'ENOENT') {
+                    this.log('Translation cache file not found. Bootstrap from seed and create file', {
+                        file: this.translationCacheFile,
+                        brand_entries: Object.keys(this.translationFileCache.brand).length,
+                        model_entries: Object.keys(this.translationFileCache.model).length
+                    });
+                    await this.persistTranslationCacheToFile();
+                } else {
                     this.log(`Failed to load translation cache file: ${error.message}`);
                 }
             } finally {
@@ -989,12 +674,12 @@ class Che168Parser {
         const candidates = [breadcrumbBrand, brandRaw].filter(Boolean);
 
         for (const candidate of candidates) {
-            if (this.brandTranslations[candidate]) {
-                return this.brandTranslations[candidate];
-            }
             const fromCache = this.getTranslationFromCache('brand', candidate);
             if (fromCache) {
                 return fromCache;
+            }
+            if (this.brandTranslations[candidate]) {
+                return this.brandTranslations[candidate];
             }
             if (!this.containsNonAscii(candidate)) {
                 return candidate.toUpperCase();
@@ -1025,14 +710,14 @@ class Che168Parser {
         ].filter(Boolean);
 
         for (const raw of candidates) {
+            const fromCache = this.getTranslationFromCache('model', raw);
+            if (fromCache) {
+                return fromCache;
+            }
             for (const [cn, en] of Object.entries(this.modelTranslations)) {
                 if (raw.includes(cn)) {
                     return en.toUpperCase();
                 }
-            }
-            const fromCache = this.getTranslationFromCache('model', raw);
-            if (fromCache) {
-                return fromCache;
             }
         }
 

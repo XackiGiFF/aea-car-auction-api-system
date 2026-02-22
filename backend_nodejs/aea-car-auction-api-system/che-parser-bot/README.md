@@ -32,6 +32,7 @@
   - `DEEPSEEK_ENABLED=true`
   - `DEEPSEEK_API_KEY=<secret>`
   - `CHE_TRANSLATION_CACHE_FILE=/app/data/che-translations.cache.json` (переводы кэшируются в JSON и используются до повторного запроса к AI)
+  - `CHE_TRANSLATION_SEED_FILE=/app/config/translations.seed.json` (seed-словарь для первичного заполнения кэша и fallback по slug)
 
 ## Что делает воркер
 
