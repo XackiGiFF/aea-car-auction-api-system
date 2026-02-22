@@ -84,12 +84,21 @@ class Car_Auction_Direct_Redirect {
     /**
      * Find existing auto post by car_auction_id
      */
-    private function find_existing_auto_post($car_id): ?array
+    private function find_existing_auto_post($car_id, $market): ?int
     {
-        $existing_id = get_posts(array(
+        $existing_ids = get_posts(array(
             'post_type'      => 'auto',
-            'meta_key'       => '_car_auction_id',
-            'meta_value'     => $car_id,
+            'meta_query'     => array(
+                'relation' => 'AND',
+                array(
+                    'key' => '_car_auction_id',
+                    'value' => $car_id
+                ),
+                array(
+                    'key' => '_car_auction_market',
+                    'value' => $market
+                )
+            ),
             'posts_per_page' => 1,
             'fields'         => 'ids',           // Только ID!
             'no_found_rows'  => true,            // Не считать общее количество
@@ -97,8 +106,12 @@ class Car_Auction_Direct_Redirect {
             'update_post_meta_cache' => false,
             'update_post_term_cache' => false,
         ));
-        
-        return !empty($existing_id) ? $existing_id : null;
+
+        if (empty($existing_ids)) {
+            return null;
+        }
+
+        return (int)$existing_ids[0];
     }
     
     /**
@@ -188,12 +201,12 @@ class Car_Auction_Direct_Redirect {
         }
 
         // First, check if auto post already exists
-        $existing_id = $this->find_existing_auto_post($car_id);
+        $existing_id = $this->find_existing_auto_post($car_id, $market);
 
         if ($existing_id) {
             // Post exists, redirect immediately
-            $redirect_url = get_permalink($existing_id[0]);
-            error_log("Car Auction Direct: Found existing auto post ID {$existing_id[0]}, redirecting to $redirect_url");
+            $redirect_url = get_permalink($existing_id);
+            error_log("Car Auction Direct: Found existing auto post ID {$existing_id}, redirecting to $redirect_url");
             wp_redirect($redirect_url);
             exit;
         }
@@ -236,13 +249,13 @@ class Car_Auction_Direct_Redirect {
     private function schedule_async_post_creation($car_id, $market): void
     {
         # Check if WordPress post exists
-        $existing_auto = $this->find_existing_auto_post($car_id);
+        $existing_post_id = $this->find_existing_auto_post($car_id, $market);
 
-        if ($existing_auto) {
+        if ($existing_post_id) {
             // WordPress post exists, redirect to it
             wp_send_json_success(array(
                 'exists' => true,
-                'redirect_url' => get_permalink($existing_auto->ID),
+                'redirect_url' => get_permalink($existing_post_id),
                 'type' => 'post'
             ));
             return;
@@ -338,10 +351,10 @@ class Car_Auction_Direct_Redirect {
 
         try {
             // Check if post was already created by another process
-            $existing_auto = $this->find_existing_auto_post($car_id);
-            if ($existing_auto) {
+            $existing_post_id = $this->find_existing_auto_post($car_id, $market);
+            if ($existing_post_id) {
                 error_log("Car Auction: Post already exists for car $car_id, skipping creation");
-                $this->update_queue_status($car_id, $market, 'completed', null, $existing_auto->ID);
+                $this->update_queue_status($car_id, $market, 'completed', null, $existing_post_id);
                 return;
             }
 

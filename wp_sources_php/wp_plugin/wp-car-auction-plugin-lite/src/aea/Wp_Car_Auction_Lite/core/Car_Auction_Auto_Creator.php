@@ -49,7 +49,7 @@ class Car_Auction_Auto_Creator {
 
         try {
             // Check if post already exists
-            $existing_post_id = $this->find_existing_auto_post_id($car_id);
+            $existing_post_id = $this->find_existing_auto_post_id($car_id, $market);
             if ($existing_post_id) {
                 // Post already exists, mark queue as completed
                 $this->update_queue_status($car_id, $market, 'completed', null, $existing_post_id);
@@ -153,21 +153,25 @@ class Car_Auction_Auto_Creator {
         }
     }
 
-    private function find_existing_auto_post_id(string $car_id): ?int
+    private function find_existing_auto_post_id(string $car_id, string $market): ?int
     {
         global $wpdb;
 
         $post_id = $wpdb->get_var($wpdb->prepare(
             "SELECT p.ID
              FROM {$wpdb->posts} p
-             INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID
-             WHERE pm.meta_key = '_car_auction_id'
-               AND pm.meta_value = %s
+             INNER JOIN {$wpdb->postmeta} pm_id ON pm_id.post_id = p.ID
+             INNER JOIN {$wpdb->postmeta} pm_market ON pm_market.post_id = p.ID
+             WHERE pm_id.meta_key = '_car_auction_id'
+               AND pm_id.meta_value = %s
+               AND pm_market.meta_key = '_car_auction_market'
+               AND pm_market.meta_value = %s
                AND p.post_type = 'auto'
                AND p.post_status IN ('publish', 'future', 'draft', 'pending', 'private')
              ORDER BY p.ID DESC
              LIMIT 1",
-            $car_id
+            $car_id,
+            $market
         ));
 
         return $post_id ? intval($post_id) : null;
@@ -571,17 +575,12 @@ class Car_Auction_Auto_Creator {
      */
     private function map_fuel_type($fuel_code): string
     {
-        $fuel_map = array(
-            'H' => 'Гибрид (H)',
-            'G' => 'Бензин',
-            'D' => 'Дизель',
-            'E' => 'Электро',
-            'L' => 'Газ',
-            'P' => 'Гибрид (P)',
-            '&' => 'Гибрид (&)',
-            '' => ''
-        );
-        return $fuel_map[$fuel_code] ?? $fuel_code;
+        $normalized_code = is_scalar($fuel_code) ? strtoupper(trim((string)$fuel_code)) : '';
+        if ($normalized_code === '') {
+            return '';
+        }
+
+        return $this->api->get_fuel_name($normalized_code);
     }
 
     /**
