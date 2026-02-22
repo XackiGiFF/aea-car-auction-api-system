@@ -222,16 +222,14 @@ class Render_Search_Result {
 
             <div class="price-wrapper">
                 <div class="car-action-buttons">
-                    <a href="<?php echo esc_url($car_url); ?>"
-                         class="button-red-small m-15 car-details-btn"
-                         data-car-url="<?php echo esc_url($car_url); ?>"
+                    <div class="button-red-small m-15 car-details-btn"
                          data-car-id="<?php echo esc_attr($car['id']); ?>"
                          data-market="<?php echo esc_attr($car['market']); ?>"
                          data-brand="<?php echo esc_attr($car['brand']); ?>"
                          data-model="<?php echo esc_attr($car['model']); ?>"
                          title="Перейти на детальную страницу">
                         <div class="m-14-600 white">Подробнее</div>
-                    </a>
+                    </div>
                 </div>
 
                 <div
