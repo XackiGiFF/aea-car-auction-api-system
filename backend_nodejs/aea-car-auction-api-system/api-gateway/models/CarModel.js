@@ -66,7 +66,8 @@ class CarModel {
             const cars = rawCars.map(car => this._normalizeCarData(car));
 
             // Г. Сохраняем в фоне (обновляем данные, не трогая цены)
-            if (this._shouldSyncWithDatabase(provider, table)) {
+            const shouldSkipSyncOnFuelFilter = provider === 'ajes' && table === 'china' && this._hasFuelFilter(filters);
+            if (this._shouldSyncWithDatabase(provider, table) && !shouldSkipSyncOnFuelFilter) {
                 const syncPromise = this.saveCarsToDatabase(cars, table).catch(err =>
                     console.error(`[Background] Error saving cars to ${table}:`, err.message)
                 );
@@ -522,6 +523,11 @@ class CarModel {
         return hasValue(filters.price_from) || hasValue(filters.price_to);
     }
 
+    _hasFuelFilter(filters = {}) {
+        const hasValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
+        return hasValue(filters.fuel_type) || hasValue(filters.fuel_group) || hasValue(filters.fuel);
+    }
+
     _parseOptionalNumber(value, parser = parseFloat) {
         if (value === undefined || value === null || value === '') {
             return null;
@@ -626,7 +632,7 @@ class CarModel {
             electric: ['E'],
             other: ['O', '']
         };
-        const fuelValue = filters.fuel_type || filters.fuel_group;
+        const fuelValue = filters.fuel_type || filters.fuel_group || filters.fuel;
         const fuelCodes = this._resolveGroupedValues(fuelValue, fuelGroups);
         this._pushInCondition(conditions, params, 'TIME', fuelCodes);
 

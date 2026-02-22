@@ -197,6 +197,20 @@ const runOnDemandRecalculation = async (carId, table) => {
     }
 };
 
+const normalizeLegacyFilterAliases = (filters = {}) => {
+    const normalized = { ...filters };
+    const hasFuelType = normalized.fuel_type !== undefined && normalized.fuel_type !== null && String(normalized.fuel_type).trim() !== '';
+    const hasFuelGroup = normalized.fuel_group !== undefined && normalized.fuel_group !== null && String(normalized.fuel_group).trim() !== '';
+    const hasLegacyFuel = normalized.fuel !== undefined && normalized.fuel !== null && String(normalized.fuel).trim() !== '';
+
+    // Обратная совместимость: поддержка старого параметра fuel=hybrid
+    if (!hasFuelType && !hasFuelGroup && hasLegacyFuel) {
+        normalized.fuel_group = String(normalized.fuel).trim();
+    }
+
+    return normalized;
+};
+
 // ==================== РОУТЫ ====================
 
 /**
@@ -281,10 +295,11 @@ router.get('/cars', validateBarrierCode, async (req, res) => {
             return res.status(400).json({ error: 'Client IP required for AJES' });
         }
 
+        const normalizedFilters = normalizeLegacyFilterAliases(filters);
         const queryFilters = {
             limit: parseInt(limit),
             offset: parseInt(offset),
-            ...filters
+            ...normalizedFilters
         };
 
         // Запускаем параллельно подсчет и получение данных
@@ -519,7 +534,8 @@ router.get('/filters/dynamic', validateBarrierCode, async (req, res) => {
             return res.status(400).json({ error: 'Client IP required' });
         }
 
-        const data = await CarModel.getDynamicFilters(filters, table, provider, clientIP);
+        const normalizedFilters = normalizeLegacyFilterAliases(filters);
+        const data = await CarModel.getDynamicFilters(normalizedFilters, table, provider, clientIP);
 
         res.json({ success: true, data });
 
