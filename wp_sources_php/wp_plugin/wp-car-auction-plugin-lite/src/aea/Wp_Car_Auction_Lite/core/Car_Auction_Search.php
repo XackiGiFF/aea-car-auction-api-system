@@ -139,8 +139,10 @@ class Car_Auction_Search {
             error_log("Car Auction: Processing car detail request - Market: $market_name, Brand-Model: $brand_model, Car ID: $car_id");
         }
 
+        $internal_market = $this->market_name_to_code($market_name);
+
         // First, check if auto post already exists
-        $existing_auto = $this->find_existing_auto_post($car_id);
+        $existing_auto = $this->find_existing_auto_post($car_id, $internal_market);
 
         if ($existing_auto) {
             // Post exists, redirect to it
@@ -165,8 +167,6 @@ class Car_Auction_Search {
             $wp_query->set_404();
             status_header(404);
         }
-            $internal_market = $this->market_name_to_code($market_name);
-
             // Parse brand and model from the slug (brand-model). We only split on first hyphen to preserve model dashes.
             $brand = '';
             $model = '';
@@ -1105,12 +1105,21 @@ class Car_Auction_Search {
     /**
      * Find existing auto post by car_auction_id
      */
-    private function find_existing_auto_post($car_id): int|\WP_Post|null
+    private function find_existing_auto_post($car_id, $market): int|\WP_Post|null
     {
         $existing_posts = get_posts(array(
             'post_type' => 'auto',
-            'meta_key' => '_car_auction_id',
-            'meta_value' => $car_id,
+            'meta_query' => array(
+                'relation' => 'AND',
+                array(
+                    'key' => '_car_auction_id',
+                    'value' => $car_id
+                ),
+                array(
+                    'key' => '_car_auction_market',
+                    'value' => $market
+                )
+            ),
             'post_status' => 'publish',
             'numberposts' => 1
         ));
