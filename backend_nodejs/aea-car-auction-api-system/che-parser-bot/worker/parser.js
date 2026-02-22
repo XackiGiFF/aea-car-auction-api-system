@@ -961,6 +961,18 @@ class Che168Parser {
         return Math.round(numeric);
     }
 
+    normalizePriceCny(value) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric) || numeric <= 0) {
+            return 0;
+        }
+
+        // START/FINISH/AVG_PRICE stored as VARCHAR(10) in DB.
+        const rounded = Math.round(numeric);
+        const capped = Math.min(9999999999, rounded);
+        return capped >= 0 ? capped : 0;
+    }
+
     extractYearFromText(value) {
         const match = String(value || '').match(/(20\d{2}|19\d{2})年/u);
         if (!match) return null;
@@ -1415,7 +1427,8 @@ class Che168Parser {
         }
 
         if (priceMatch) {
-            details.price = parseFloat(priceMatch[1]) * 10000;
+            const wanPrice = Number(priceMatch[1]);
+            details.price = this.normalizePriceCny(wanPrice * 10000);
             this.log(`Final price: ${priceMatch[1]}万 = ${details.price} CNY`);
         }
 
@@ -1661,7 +1674,9 @@ class Che168Parser {
                 : this.extractHorsepowerFromApi(apiCar);
             const imageList = this.normalizeImageList(normalizedDetails.images || apiCar.image || '');
             const localizedImages = await this.localizeImages(imageList, brandEnglish, modelEnglish, carId);
-            const basePrice = normalizedDetails.price ? normalizedDetails.price : (parseFloat(apiCar.price) * 10000);
+            const parsedDetailsPrice = this.normalizePriceCny(normalizedDetails.price);
+            const apiPrice = this.normalizePriceCny(parseFloat(apiCar.price) * 10000);
+            const basePrice = parsedDetailsPrice > 0 ? parsedDetailsPrice : apiPrice;
             const mileageKm = Number.isFinite(Number(normalizedDetails.mileage))
                 ? Math.round(Number(normalizedDetails.mileage))
                 : this.extractMileageKmFromApi(apiCar);
@@ -1687,12 +1702,12 @@ class Che168Parser {
                 MILEAGE: mileageKm !== '' ? String(mileageKm) : '',
                 EQUIP: '',
                 RATE: '',
-                START: basePrice.toString(),
-                FINISH: basePrice.toString(),
+                START: String(basePrice),
+                FINISH: String(basePrice),
                 STATUS: 'available',
                 TIME: fuelType,
                 SANCTION: '',
-                AVG_PRICE: basePrice.toString(),
+                AVG_PRICE: String(basePrice),
                 AVG_STRING: '',
                 IMAGES: localizedImages.join('#'),
                 PRICE_CALC: null,

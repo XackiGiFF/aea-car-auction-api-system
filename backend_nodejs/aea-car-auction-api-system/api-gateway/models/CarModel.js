@@ -43,7 +43,7 @@ class CarModel {
             // 1. ВЕТКА ЛОКАЛЬНОГО ПОИСКА:
             // Если задан фильтр по цене (price_from/price_to), мы НЕ МОЖЕМ искать через API AJES,
             // так как там нет наших цен. Ищем только у нас в базе.
-            if (filters.price_from || filters.price_to) {
+            if (this._hasPriceFilter(filters)) {
                 // console.log(`[Search] Searching locally due to price filter`);
                 return await this._getLocalCarsWithFilters(filters, table);
             }
@@ -81,6 +81,12 @@ class CarModel {
 
     async getTotalCount(filters = {}, table = 'main', provider = 'ajes', clientIP) {
         try {
+            // Для ценового фильтра считаем total по тем же локальным условиям,
+            // что и список cars, иначе ломается пагинация.
+            if (this._hasPriceFilter(filters)) {
+                return await this._getLocalCarsCountWithFilters(filters, table);
+            }
+
             const providerInstance = ProviderFactory.getProvider(provider);
             return await providerInstance.getTotalCount(filters, table, clientIP);
         } catch (error) {
@@ -476,6 +482,144 @@ class CarModel {
         return !(provider === 'che-168' && table === 'che_available');
     }
 
+    _hasPriceFilter(filters = {}) {
+        const hasValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
+        return hasValue(filters.price_from) || hasValue(filters.price_to);
+    }
+
+    _parseOptionalNumber(value, parser = parseFloat) {
+        if (value === undefined || value === null || value === '') {
+            return null;
+        }
+
+        const parsed = parser(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    _resolveGroupedValues(value, groups = null) {
+        if (value === undefined || value === null || value === '') {
+            return [];
+        }
+
+        const raw = String(value).trim();
+        if (!raw) return [];
+
+        if (groups) {
+            const byLower = groups[raw.toLowerCase()];
+            if (Array.isArray(byLower) && byLower.length > 0) {
+                return byLower;
+            }
+        }
+
+        return [raw.toUpperCase()];
+    }
+
+    _pushInCondition(conditions, params, column, values) {
+        if (!Array.isArray(values) || values.length === 0) return;
+        const placeholders = values.map(() => '?').join(',');
+        conditions.push(`${column} IN (${placeholders})`);
+        params.push(...values);
+    }
+
+    _buildLocalSearchWhere(filters = {}) {
+        const conditions = ['1=1', '(deleted = 0 OR deleted IS NULL)'];
+        const params = [];
+
+        const priceFrom = this._parseOptionalNumber(filters.price_from, parseFloat);
+        if (priceFrom !== null) {
+            conditions.push('CALC_RUB >= ?');
+            params.push(priceFrom);
+        }
+
+        const priceTo = this._parseOptionalNumber(filters.price_to, parseFloat);
+        if (priceTo !== null) {
+            conditions.push('CALC_RUB <= ?');
+            params.push(priceTo);
+        }
+
+        if (filters.vendor !== undefined && filters.vendor !== null && String(filters.vendor).trim() !== '') {
+            conditions.push('MARKA_NAME = ?');
+            params.push(String(filters.vendor).trim().toUpperCase());
+        }
+
+        if (filters.model !== undefined && filters.model !== null && String(filters.model).trim() !== '') {
+            conditions.push('MODEL_NAME = ?');
+            params.push(String(filters.model).trim().toUpperCase());
+        }
+
+        const yearFrom = this._parseOptionalNumber(filters.year_from, parseInt);
+        if (yearFrom !== null) {
+            conditions.push('YEAR >= ?');
+            params.push(yearFrom);
+        }
+
+        const yearTo = this._parseOptionalNumber(filters.year_to, parseInt);
+        if (yearTo !== null) {
+            conditions.push('YEAR <= ?');
+            params.push(yearTo);
+        }
+
+        const engineFrom = this._parseOptionalNumber(filters.engine_from, parseFloat);
+        if (engineFrom !== null) {
+            conditions.push('ENG_V >= ?');
+            params.push(engineFrom);
+        }
+
+        const engineTo = this._parseOptionalNumber(filters.engine_to, parseFloat);
+        if (engineTo !== null) {
+            conditions.push('ENG_V <= ?');
+            params.push(engineTo);
+        }
+
+        const mileageExpr = "CAST(REPLACE(REPLACE(MILEAGE, ',', ''), ' ', '') AS UNSIGNED)";
+        const mileageFrom = this._parseOptionalNumber(filters.mileage_from, parseInt);
+        if (mileageFrom !== null) {
+            conditions.push(`${mileageExpr} >= ?`);
+            params.push(mileageFrom);
+        }
+
+        const mileageTo = this._parseOptionalNumber(filters.mileage_to, parseInt);
+        if (mileageTo !== null) {
+            conditions.push(`${mileageExpr} <= ?`);
+            params.push(mileageTo);
+        }
+
+        const fuelGroups = {
+            petrol: ['G', 'P', 'L', 'C'],
+            diesel: ['D'],
+            hybrid: ['H', 'HE', '&'],
+            electric: ['E'],
+            other: ['O', '']
+        };
+        const fuelValue = filters.fuel_type || filters.fuel_group;
+        const fuelCodes = this._resolveGroupedValues(fuelValue, fuelGroups);
+        this._pushInCondition(conditions, params, 'TIME', fuelCodes);
+
+        const transmissionGroups = {
+            automatic: ['AT', 'A', 'AUTO', 'DCT', 'DSG', 'PDK', 'SAT', 'IAT', 'FAT'],
+            manual: ['MT', 'M', 'FMT', 'IMT', 'DMT'],
+            cvt: ['CVT', 'ECVT', 'FCVT', 'DCVT', 'CCVT', 'AC'],
+            hybrid: ['HL', 'H'],
+            sequential: ['SQ', 'SEQ'],
+            other: ['OTHER', '-', '...']
+        };
+        const transmissionValue = filters.transmission || filters.transmission_group;
+        const transmissionCodes = this._resolveGroupedValues(transmissionValue, transmissionGroups);
+        this._pushInCondition(conditions, params, 'KPP', transmissionCodes);
+
+        const driveGroups = {
+            fwd: ['FF', 'FWD', '2WD'],
+            rwd: ['FR', 'RWD', 'RR'],
+            awd: ['4WD', 'AWD', '4X4', 'FULLTIME4WD', 'PARTTIME4WD'],
+            other: ['OTHER']
+        };
+        const driveValue = filters.drive || filters.drive_group;
+        const driveCodes = this._resolveGroupedValues(driveValue, driveGroups);
+        this._pushInCondition(conditions, params, 'PRIV', driveCodes);
+
+        return { conditions, params };
+    }
+
     _getColumnValue(car, column) {
         if (column === 'ID') {
             return String(car.ID || car.id || '').trim() || null;
@@ -566,52 +710,7 @@ class CarModel {
     async _getLocalCarsWithFilters(filters, table) {
         let connection;
         try {
-            const conditions = ['1=1'];
-            const params = [];
-
-            // === Генерация SQL условий ===
-
-            // Цена
-            if (filters.price_from) {
-                conditions.push('CALC_RUB >= ?');
-                params.push(parseInt(filters.price_from));
-            }
-            if (filters.price_to) {
-                conditions.push('CALC_RUB <= ?');
-                params.push(parseInt(filters.price_to));
-            }
-
-            // Марка
-            if (filters.vendor) {
-                conditions.push('MARKA_NAME = ?');
-                params.push(filters.vendor);
-            }
-
-            // Модель
-            if (filters.model) {
-                conditions.push('MODEL_NAME = ?');
-                params.push(filters.model);
-            }
-
-            // Год
-            if (filters.year_from) {
-                conditions.push('YEAR >= ?');
-                params.push(parseInt(filters.year_from));
-            }
-            if (filters.year_to) {
-                conditions.push('YEAR <= ?');
-                params.push(parseInt(filters.year_to));
-            }
-
-            // Объем
-            if (filters.engine_from) {
-                conditions.push('ENG_V >= ?');
-                params.push(parseFloat(filters.engine_from));
-            }
-            if (filters.engine_to) {
-                conditions.push('ENG_V <= ?');
-                params.push(parseFloat(filters.engine_to));
-            }
+            const { conditions, params } = this._buildLocalSearchWhere(filters);
 
             // Пагинация
             const limit = parseInt(filters.limit) || 20;
@@ -629,6 +728,26 @@ class CarModel {
         } catch (error) {
             console.error('Error searching local DB:', error.message);
             return [];
+        } finally {
+            if (connection) {
+                connection.release();
+            }
+        }
+    }
+
+    async _getLocalCarsCountWithFilters(filters, table) {
+        let connection;
+        try {
+            const { conditions, params } = this._buildLocalSearchWhere(filters);
+            const whereClause = conditions.join(' AND ');
+            const sql = `SELECT COUNT(*) AS total FROM ${table} WHERE ${whereClause}`;
+
+            connection = await db.getConnection();
+            const [rows] = await connection.execute(sql, params);
+            return rows && rows[0] ? Number(rows[0].total) || 0 : 0;
+        } catch (error) {
+            console.error('Error counting local DB cars:', error.message);
+            return 0;
         } finally {
             if (connection) {
                 connection.release();
