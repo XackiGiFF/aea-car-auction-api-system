@@ -1,8 +1,8 @@
-name: WP Plugin Release
+name: WP Plugin Release (Main Only)
 
 on:
   push:
-    branches: ["main", "prod"]
+    branches: ["main"]
     paths:
       - "wp_sources_php/wp_plugin/wp-car-auction-plugin-lite/**"
       - "scripts/bump_wp_plugin_version.sh"
