@@ -66,8 +66,7 @@ class CarModel {
             const cars = rawCars.map(car => this._normalizeCarData(car));
 
             // Г. Сохраняем в фоне (обновляем данные, не трогая цены)
-            const shouldSkipSyncOnFuelFilter = provider === 'ajes' && table === 'china' && this._hasFuelFilter(filters);
-            if (this._shouldSyncWithDatabase(provider, table) && !shouldSkipSyncOnFuelFilter) {
+            if (this._shouldSyncWithDatabase(provider, table)) {
                 const syncPromise = this.saveCarsToDatabase(cars, table).catch(err =>
                     console.error(`[Background] Error saving cars to ${table}:`, err.message)
                 );
@@ -385,10 +384,21 @@ class CarModel {
                 });
             });
 
-            // Обновляем всё, кроме цены (CALC_RUB)
+            const nonUpdatableFields = new Set(['STATUS', 'AUCTION_DATE']);
+
+            // Обновляем только безопасные поля (исключаем "шумные" STATUS/AUCTION_DATE).
             const updateClause = columns
-                .filter(col => col !== 'ID')
-                .map(col => `${col} = VALUES(${col})`)
+                .filter(col => col !== 'ID' && !nonUpdatableFields.has(col))
+                .map(col => {
+                    if (col === 'TIME') {
+                        // Не допускаем деградацию топлива в БД (например H -> P).
+                        return `TIME = CASE 
+                            WHEN TIME IN ('H','HE','&','E','D','L','C') AND VALUES(TIME) IN ('P','G','B') THEN TIME
+                            ELSE VALUES(TIME)
+                        END`;
+                    }
+                    return `${col} = VALUES(${col})`;
+                })
                 .join(', ');
 
             const sql = `
@@ -444,16 +454,28 @@ class CarModel {
 
             try {
                 // Проверяем существование
+                const existingSelectColumns = availableColumns.has('TIME') ? 'ID, TIME' : 'ID';
                 const [existing] = await connection.execute(
-                    `SELECT ID FROM ${table} WHERE ID = ?`,
+                    `SELECT ${existingSelectColumns} FROM ${table} WHERE ID = ?`,
                     [savePayload.ID]
                 );
 
                 if (existing.length > 0) {
-                    // Обновляем
-                    const updateFields = columns.filter(col => col !== 'ID').map(col => `${col} = ?`).join(', ');
-                    const values = columns
-                        .filter(col => col !== 'ID')
+                    if (availableColumns.has('TIME')) {
+                        const existingFuelCode = this._normalizeFuelCode(existing[0].TIME);
+                        const incomingFuelCode = this._normalizeFuelCode(savePayload.TIME);
+                        const resolvedFuelCode = this._resolveFuelCodeConflict(existingFuelCode, incomingFuelCode);
+                        if (resolvedFuelCode && resolvedFuelCode !== incomingFuelCode) {
+                            savePayload.TIME = resolvedFuelCode;
+                            console.log(`[DB] Preserved fuel code for ${savePayload.ID}: ${incomingFuelCode} -> ${resolvedFuelCode}`);
+                        }
+                    }
+
+                    // Обновляем только безопасные поля (исключаем "шумные" STATUS/AUCTION_DATE).
+                    const nonUpdatableFields = new Set(['STATUS', 'AUCTION_DATE']);
+                    const columnsToUpdate = columns.filter(col => col !== 'ID' && !nonUpdatableFields.has(col));
+                    const updateFields = columnsToUpdate.map(col => `${col} = ?`).join(', ');
+                    const values = columnsToUpdate
                         .map(col => this._getColumnValue(savePayload, col));
                     values.push(savePayload.ID);
 
@@ -521,11 +543,6 @@ class CarModel {
     _hasPriceFilter(filters = {}) {
         const hasValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
         return hasValue(filters.price_from) || hasValue(filters.price_to);
-    }
-
-    _hasFuelFilter(filters = {}) {
-        const hasValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
-        return hasValue(filters.fuel_type) || hasValue(filters.fuel_group) || hasValue(filters.fuel);
     }
 
     _parseOptionalNumber(value, parser = parseFloat) {
@@ -666,6 +683,27 @@ class CarModel {
             return String(car.ID || car.id || '').trim() || null;
         }
         return car[column] !== undefined ? car[column] : null;
+    }
+
+    _normalizeFuelCode(value) {
+        if (value === undefined || value === null) {
+            return '';
+        }
+        return String(value).trim().toUpperCase();
+    }
+
+    _resolveFuelCodeConflict(existingCode, incomingCode) {
+        if (!incomingCode) return existingCode || '';
+        if (!existingCode || existingCode === incomingCode) return incomingCode;
+
+        const protectedCodes = new Set(['H', 'HE', '&', 'E', 'D', 'L', 'C']);
+        const petrolCodes = new Set(['P', 'G', 'B']);
+
+        if (protectedCodes.has(existingCode) && petrolCodes.has(incomingCode)) {
+            return existingCode;
+        }
+
+        return incomingCode;
     }
 
     async _getTableColumns(table) {
