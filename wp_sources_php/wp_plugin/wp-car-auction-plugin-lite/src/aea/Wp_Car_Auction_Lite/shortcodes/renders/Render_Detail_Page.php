@@ -283,20 +283,18 @@ class Render_Detail_Page {
                                     <?php endif; ?>
                                 </div>
                                 <div class="price-car-wrapper">
-                                    <div class="one-char-left m-16-400 gray">Стоимость</div>
-                                    <div class="one-char-right m-16-400">
-                                        <?php
-                                        $initial_calc_price = '';
-                                        if (isset($car['calc_rub']) && is_numeric($car['calc_rub']) && (float)$car['calc_rub'] > 0) {
-                                            $initial_calc_price = number_format((float)$car['calc_rub'], 0, '.', ' ') . ' ₽';
-                                        }
-                                        ?>
-                                        <span
-                                            id="car-price-value"
-                                            class="car-price-loading"
-                                            data-initial-price="<?php echo esc_attr($initial_calc_price); ?>"
-                                        ><?php echo esc_html($initial_calc_price !== '' ? $initial_calc_price : 'Расчет стоимости...'); ?></span>
-                                    </div>
+                                    <div class="m-16-400 gray">Стоимость</div>
+                                    <?php
+                                    $initial_calc_price = 'по запросу';
+                                    if (isset($car['calc_rub']) && is_numeric($car['calc_rub']) && (float)$car['calc_rub'] > 0) {
+                                        $initial_calc_price = number_format((float)$car['calc_rub'], 0, '', ' ') . ' ₽';
+                                    }
+                                    ?>
+                                    <div
+                                        id="car-price-value"
+                                        class="m-32-600"
+                                        data-initial-price="<?php echo esc_attr($initial_calc_price); ?>"
+                                    ><?php echo esc_html($initial_calc_price); ?></div>
                                 </div>
                                 <div class="price-desc-text">Стоимость является ориентировочной. Точную стоимость конкретного автомобиля уточняйте у наших менеджеров.</div>
                             </div>
@@ -450,33 +448,7 @@ class Render_Detail_Page {
         <script>
             jQuery(document).ready(function($) {
                 var $placeholder = $('#similar-cars-placeholder');
-                var $priceValue = $('#car-price-value');
-                var initialPrice = $priceValue.data('initial-price') || '';
                 var ajaxUrl = '<?php echo admin_url('admin-ajax.php'); ?>';
-
-                if ($priceValue.length) {
-                    $.ajax({
-                        url: ajaxUrl,
-                        type: 'POST',
-                        timeout: 20000,
-                        data: {
-                            action: 'load_car_price_ajax',
-                            car_id: '<?php echo esc_js($car['id']); ?>',
-                            market: '<?php echo esc_js($car['market']); ?>',
-                            nonce: '<?php echo wp_create_nonce('car_auction_price_ajax'); ?>'
-                        },
-                        success: function(response) {
-                            if (response && response.success && response.data && response.data.formatted_price) {
-                                $priceValue.text(response.data.formatted_price).removeClass('car-price-loading');
-                            } else {
-                                $priceValue.text(initialPrice || 'по запросу').removeClass('car-price-loading');
-                            }
-                        },
-                        error: function() {
-                            $priceValue.text(initialPrice || 'по запросу').removeClass('car-price-loading');
-                        }
-                    });
-                }
 
                 if ($placeholder.length) {
                     $.ajax({
@@ -531,10 +503,6 @@ class Render_Detail_Page {
             @keyframes spin {
                 0% { transform: rotate(0deg); }
                 100% { transform: rotate(360deg); }
-            }
-
-            .car-price-loading {
-                opacity: 0.85;
             }
             </style>
         <!-- End Car Auction Preload Detail Content -->

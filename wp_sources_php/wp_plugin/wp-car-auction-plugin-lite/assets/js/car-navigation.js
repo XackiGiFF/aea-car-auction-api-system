@@ -73,6 +73,15 @@ class CarNavigation extends CarAuctionCore {
 
         const $button = $(e.currentTarget);
 
+        // For car details button use direct navigation without extra AJAX.
+        if ($button.hasClass('car-details-btn')) {
+            const directUrl = $button.attr('href') || $button.data('car-url') || $button.closest('.one-car-wrapper').data('car-url');
+            if (directUrl && this.isValidUrl(directUrl)) {
+                window.location.href = directUrl;
+                return;
+            }
+        }
+
         // Получаем raw данные без санитизации (особенно важно для числовых ID)
         const rawCarId = $button.data('car-id');
         const rawMarket = $button.data('market') || 'main';
