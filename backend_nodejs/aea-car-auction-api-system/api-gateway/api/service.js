@@ -211,6 +211,23 @@ const normalizeLegacyFilterAliases = (filters = {}) => {
     return normalized;
 };
 
+const sanitizeRequestContext = (tableRaw, providerRaw) => {
+    const table = String(tableRaw || 'main').trim().toLowerCase();
+    const provider = String(providerRaw || 'ajes').trim().toLowerCase();
+    const allowedTables = new Set(CarModel.getTables());
+    const allowedProviders = new Set(CarModel.getAvailableProviders());
+
+    if (!allowedTables.has(table)) {
+        return { error: `Unsupported table: ${table}` };
+    }
+
+    if (!allowedProviders.has(provider)) {
+        return { error: `Unsupported provider: ${provider}` };
+    }
+
+    return { table, provider };
+};
+
 // ==================== РОУТЫ ====================
 
 /**
@@ -291,7 +308,14 @@ router.get('/cars', validateBarrierCode, async (req, res) => {
         } = req.query;
         const clientIP = client_ip || ip;
 
-        if (provider === 'ajes' && !clientIP) {
+        const context = sanitizeRequestContext(table, provider);
+        if (context.error) {
+            return res.status(400).json({ error: context.error });
+        }
+        const safeTable = context.table;
+        const safeProvider = context.provider;
+
+        if (safeProvider === 'ajes' && !clientIP) {
             return res.status(400).json({ error: 'Client IP required for AJES' });
         }
 
@@ -304,12 +328,12 @@ router.get('/cars', validateBarrierCode, async (req, res) => {
 
         // Запускаем параллельно подсчет и получение данных
         const [totalCount, cars] = await Promise.all([
-            CarModel.getTotalCount(queryFilters, table, provider, clientIP),
-            CarModel.getCarsByFilter(queryFilters, table, provider, clientIP)
+            CarModel.getTotalCount(queryFilters, safeTable, safeProvider, clientIP),
+            CarModel.getCarsByFilter(queryFilters, safeTable, safeProvider, clientIP)
         ]);
 
         // Получаем фильтры для UI (можно вынести в отдельный запрос для скорости)
-        const availableFilters = await CarModel.getDynamicFilters(queryFilters, table, provider, clientIP);
+        const availableFilters = await CarModel.getDynamicFilters(queryFilters, safeTable, safeProvider, clientIP);
 
         // Рассчитываем мин/макс цену из полученных авто (так как SQL агрегация по цене сложна в API)
         let minPrice = 0, maxPrice = 0;
@@ -389,11 +413,18 @@ router.get('/car/:id', validateBarrierCode, async (req, res) => {
         const { table = 'main', provider = 'ajes', client_ip, ip, recalc = 'true' } = req.query;
         const clientIP = client_ip || ip;
 
-        if (provider === 'ajes' && !clientIP) {
+        const context = sanitizeRequestContext(table, provider);
+        if (context.error) {
+            return res.status(400).json({ error: context.error });
+        }
+        const safeTable = context.table;
+        const safeProvider = context.provider;
+
+        if (safeProvider === 'ajes' && !clientIP) {
             return res.status(400).json({ error: 'Client IP required' });
         }
 
-        const car = await CarModel.getCarById(id, table, provider, clientIP);
+        const car = await CarModel.getCarById(id, safeTable, safeProvider, clientIP);
 
         if (!car) {
             return res.status(404).json({ error: 'Car not found' });
@@ -403,8 +434,8 @@ router.get('/car/:id', validateBarrierCode, async (req, res) => {
         const shouldRecalculate = String(recalc).toLowerCase() !== 'false';
 
         if (shouldRecalculate) {
-            recalculation = await runOnDemandRecalculation(id, table);
-            const priceData = await CarModel.getCarPriceById(id, table, provider);
+            recalculation = await runOnDemandRecalculation(id, safeTable);
+            const priceData = await CarModel.getCarPriceById(id, safeTable, safeProvider);
             if (priceData?.calc_rub) {
                 car.CALC_RUB = priceData.calc_rub;
             }
@@ -455,14 +486,21 @@ router.get('/car/:id/price', validateBarrierCode, async (req, res) => {
         const { id } = req.params;
         const { table = 'main', provider = 'ajes', recalc = 'true' } = req.query;
 
+        const context = sanitizeRequestContext(table, provider);
+        if (context.error) {
+            return res.status(400).json({ error: context.error });
+        }
+        const safeTable = context.table;
+        const safeProvider = context.provider;
+
         let recalculation = { success: false, skipped: true, reason: 'not_requested' };
         const shouldRecalculate = String(recalc).toLowerCase() !== 'false';
 
         if (shouldRecalculate) {
-            recalculation = await runOnDemandRecalculation(id, table);
+            recalculation = await runOnDemandRecalculation(id, safeTable);
         }
 
-        const priceData = await CarModel.getCarPriceById(id, table, provider);
+        const priceData = await CarModel.getCarPriceById(id, safeTable, safeProvider);
 
         if (!priceData) {
             return res.status(404).json({ error: 'Price not found', recalculation });
@@ -530,12 +568,19 @@ router.get('/filters/dynamic', validateBarrierCode, async (req, res) => {
         } = req.query;
         const clientIP = client_ip || ip;
 
-        if (provider === 'ajes' && !clientIP) {
+        const context = sanitizeRequestContext(table, provider);
+        if (context.error) {
+            return res.status(400).json({ error: context.error });
+        }
+        const safeTable = context.table;
+        const safeProvider = context.provider;
+
+        if (safeProvider === 'ajes' && !clientIP) {
             return res.status(400).json({ error: 'Client IP required' });
         }
 
         const normalizedFilters = normalizeLegacyFilterAliases(filters);
-        const data = await CarModel.getDynamicFilters(normalizedFilters, table, provider, clientIP);
+        const data = await CarModel.getDynamicFilters(normalizedFilters, safeTable, safeProvider, clientIP);
 
         res.json({ success: true, data });
 
@@ -597,13 +642,20 @@ router.get('/filters', validateBarrierCode, async (req, res) => {
             client_ip
         } = req.query;
 
-        console.log(`[API] Запрос динамических фильтров /filters ${table}, provider: ${provider}`);
+        const context = sanitizeRequestContext(table, provider);
+        if (context.error) {
+            return res.status(400).json({ error: context.error });
+        }
+        const safeTable = context.table;
+        const safeProvider = context.provider;
+
+        console.log(`[API] Запрос динамических фильтров /filters ${safeTable}, provider: ${safeProvider}`);
 
         // Используем существующий метод с пустыми фильтрами
         const filters = await CarModel.getDynamicFilters(
             {}, // Пустые фильтры
-            table,
-            provider,
+            safeTable,
+            safeProvider,
             client_ip
         );
 

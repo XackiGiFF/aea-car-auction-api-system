@@ -189,15 +189,16 @@ class CarModel {
     }
 
     async bulkUpdatePrices(table, records) {
+        const safeTable = this._normalizeTable(table);
         let updatedCount = 0;
         const errors = [];
 
         for (const record of records) {
             try {
                 // Для таблицы bike используем другой набор полей
-                if (table === 'bike') {
+                if (safeTable === 'bike') {
                     const sql = `
-                    UPDATE ${table} 
+                    UPDATE ${safeTable} 
                     SET START = ?, 
                         FINISH = ?,
                         UPDATED_AT = NOW()
@@ -215,7 +216,7 @@ class CarModel {
                 } else {
                     // Для остальных таблиц (main, korea, china)
                     const sql = `
-                    UPDATE ${table} 
+                    UPDATE ${safeTable} 
                     SET START = ?, 
                         FINISH = ?, 
                         AVG_PRICE = ?,
@@ -402,6 +403,7 @@ class CarModel {
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     deleted TINYINT(1) DEFAULT 0,
+                    deleted_at TIMESTAMP NULL,
                     INDEX idx_auction_date (AUCTION_DATE),
                     INDEX idx_marka_model (MARKA_NAME, MODEL_NAME),
                     INDEX idx_price_calc (PRICE_CALC),
@@ -444,6 +446,7 @@ class CarModel {
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     deleted TINYINT(1) DEFAULT 0,
+                    deleted_at TIMESTAMP NULL,
                     INDEX idx_auction_date (AUCTION_DATE),
                     INDEX idx_marka_model (MARKA_NAME, MODEL_NAME),
                     INDEX idx_price_calc (PRICE_CALC),
@@ -486,6 +489,7 @@ class CarModel {
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     deleted TINYINT(1) DEFAULT 0,
+                    deleted_at TIMESTAMP NULL,
                     INDEX idx_auction_date (AUCTION_DATE),
                     INDEX idx_marka_model (MARKA_NAME, MODEL_NAME),
                     INDEX idx_price_calc (PRICE_CALC),
@@ -529,6 +533,7 @@ class CarModel {
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     deleted TINYINT(1) DEFAULT 0,
+                    deleted_at TIMESTAMP NULL,
                     INDEX idx_auction_date (AUCTION_DATE),
                     INDEX idx_marka_model (MARKA_NAME, MODEL_NAME),
                     INDEX idx_price_calc (PRICE_CALC),
@@ -608,62 +613,48 @@ class CarModel {
 
     // Метод для получения имени колонки с проверкой существования
     getColumnName(table, columnType) {
-        const columns = this.tableColumns[table];
+        const safeTable = this._normalizeTable(table);
+        const columns = this.tableColumns[safeTable];
         if (!columns || !columns[columnType]) {
             return null; // Колонка не существует в этой таблице
         }
         return columns[columnType];
     }
 
-    async addCalculationColumns() {
-        const alterQueries = {
-            main: `
-            ALTER TABLE main 
-            ADD COLUMN original_price DECIMAL(15,2) NULL AFTER CALC_UPDATED_AT,
-            ADD COLUMN original_currency VARCHAR(10) NULL AFTER original_price,
-            ADD COLUMN converted_price DECIMAL(15,2) NULL AFTER original_currency,
-            ADD COLUMN tks_total DECIMAL(15,2) NULL AFTER converted_price,
-            ADD COLUMN markup DECIMAL(15,2) NULL AFTER tks_total,
-            ADD COLUMN response_time INT NULL AFTER markup
-        `,
-            korea: `
-            ALTER TABLE korea 
-            ADD COLUMN original_price DECIMAL(15,2) NULL AFTER CALC_UPDATED_AT,
-            ADD COLUMN original_currency VARCHAR(10) NULL AFTER original_price,
-            ADD COLUMN converted_price DECIMAL(15,2) NULL AFTER original_currency,
-            ADD COLUMN tks_total DECIMAL(15,2) NULL AFTER converted_price,
-            ADD COLUMN markup DECIMAL(15,2) NULL AFTER tks_total,
-            ADD COLUMN response_time INT NULL AFTER markup
-        `,
-            china: `
-            ALTER TABLE china 
-            ADD COLUMN original_price DECIMAL(15,2) NULL AFTER CALC_UPDATED_AT,
-            ADD COLUMN original_currency VARCHAR(10) NULL AFTER original_price,
-            ADD COLUMN converted_price DECIMAL(15,2) NULL AFTER original_currency,
-            ADD COLUMN tks_total DECIMAL(15,2) NULL AFTER converted_price,
-            ADD COLUMN markup DECIMAL(15,2) NULL AFTER tks_total,
-            ADD COLUMN response_time INT NULL AFTER markup
-        `,
-            bike: `
-            ALTER TABLE bike 
-            ADD COLUMN original_price DECIMAL(15,2) NULL AFTER CALC_UPDATED_AT,
-            ADD COLUMN original_currency VARCHAR(10) NULL AFTER original_price,
-            ADD COLUMN converted_price DECIMAL(15,2) NULL AFTER original_currency,
-            ADD COLUMN tks_total DECIMAL(15,2) NULL AFTER converted_price,
-            ADD COLUMN markup DECIMAL(15,2) NULL AFTER tks_total,
-            ADD COLUMN response_time INT NULL AFTER markup
-        `
-        };
+    _normalizeTable(table = 'main') {
+        const normalized = String(table || 'main').trim().toLowerCase();
+        return this.tables.includes(normalized) ? normalized : 'main';
+    }
 
-        for (const [tableName, sql] of Object.entries(alterQueries)) {
+    async addCalculationColumns() {
+        const calcColumns = [
+            { name: 'original_price', definition: 'DECIMAL(15,2) NULL', after: 'CALC_UPDATED_AT' },
+            { name: 'original_currency', definition: 'VARCHAR(10) NULL', after: 'original_price' },
+            { name: 'converted_price', definition: 'DECIMAL(15,2) NULL', after: 'original_currency' },
+            { name: 'tks_total', definition: 'DECIMAL(15,2) NULL', after: 'converted_price' },
+            { name: 'markup', definition: 'DECIMAL(15,2) NULL', after: 'tks_total' },
+            { name: 'response_time', definition: 'INT NULL', after: 'markup' }
+        ];
+
+        for (const tableName of this.tables) {
+            for (const column of calcColumns) {
+                const sql = `ALTER TABLE ${tableName} ADD COLUMN ${column.name} ${column.definition} AFTER ${column.after}`;
+                try {
+                    await db.query(sql);
+                    console.log(`✅ Added column ${column.name} to ${tableName}`);
+                } catch (error) {
+                    if (error.code !== 'ER_DUP_FIELDNAME') {
+                        console.error(`❌ Error adding ${column.name} to ${tableName}:`, error.message);
+                    }
+                }
+            }
+
             try {
-                await db.query(sql);
-                console.log(`✅ Added calculation columns to ${tableName}`);
+                await db.query(`ALTER TABLE ${tableName} ADD COLUMN deleted_at TIMESTAMP NULL AFTER deleted`);
+                console.log(`✅ Added column deleted_at to ${tableName}`);
             } catch (error) {
-                if (error.code === 'ER_DUP_FIELDNAME') {
-                    console.log(`ℹ️ Columns already exist in ${tableName}`);
-                } else {
-                    console.error(`❌ Error adding columns to ${tableName}:`, error.message);
+                if (error.code !== 'ER_DUP_FIELDNAME') {
+                    console.error(`❌ Error adding deleted_at to ${tableName}:`, error.message);
                 }
             }
         }
@@ -671,7 +662,8 @@ class CarModel {
 
     // Обновим методы для возврата маппированных данных
     async getCarById(carId, table = 'main') {
-        const sql = `SELECT * FROM ${table} WHERE ID = ? AND deleted = 0`;
+        const safeTable = this._normalizeTable(table);
+        const sql = `SELECT * FROM ${safeTable} WHERE ID = ? AND deleted = 0`;
         const rows = await db.query(sql, [carId]);
         const car = rows[0] || null;
         return car ? this.mapCarData(car) : null;
@@ -679,10 +671,11 @@ class CarModel {
 
     // Обновим методы для возврата маппированных данных
     async getCarPriceById(carId, table = 'main') {
-        const sql = `SELECT CALC_RUB FROM ${table} WHERE ID = ?`;
+        const safeTable = this._normalizeTable(table);
+        const sql = `SELECT CALC_RUB FROM ${safeTable} WHERE ID = ?`;
         const rows = await db.query(sql, [carId]);
         const car = rows[0] || null;
-        return car.CALC_RUB;
+        return car ? car.CALC_RUB : null;
     }
 
     // Новый публичный метод: getDynamicFilters с кэшированием и фоновым обновлением
@@ -872,12 +865,13 @@ class CarModel {
 
     // Обновим методы для работы с конкретными колонками
     async getAvailableVendors(whereClause, params, table) {
-        const columns = this.tableColumns[table];
+        const safeTable = this._normalizeTable(table);
+        const columns = this.tableColumns[safeTable];
         if (!columns.vendor_name) return [];
 
         const sql = `
         SELECT DISTINCT ${columns.vendor_name} as name 
-        FROM ${table} 
+        FROM ${safeTable} 
         ${whereClause}
         AND ${columns.vendor_name} IS NOT NULL 
         AND ${columns.vendor_name} != ''
@@ -896,11 +890,12 @@ class CarModel {
     // Новый метод: получить модели статично (зависят только от марки) — сначала пробуем внешний сервис
     async getModelsForVendorStatic(vendorName, table = 'main') {
         if (!vendorName) return [];
+        const safeTable = this._normalizeTable(table);
 
         // Попытаемся получить внешние данные
         try {
-            const manuf = await this._fetchExternalManuf(table); // [{id,name}]
-            const models = await this._fetchExternalModels(table); // [{marka_id,model_id,name}]
+            const manuf = await this._fetchExternalManuf(safeTable); // [{id,name}]
+            const models = await this._fetchExternalModels(safeTable); // [{marka_id,model_id,name}]
 
             if (manuf && manuf.length > 0 && models && models.length > 0) {
                 // Найдём ID марки по имени (case-insensitive)
@@ -920,7 +915,7 @@ class CarModel {
         try {
             const sql = `
             SELECT DISTINCT MODEL_ID as id, MODEL_NAME as name 
-            FROM ${table} 
+            FROM ${safeTable} 
             WHERE deleted = 0
             AND MARKA_NAME = ?
             AND MODEL_ID IS NOT NULL AND MODEL_NAME IS NOT NULL
@@ -936,6 +931,7 @@ class CarModel {
 
     // Метод для получения доступных моделей для выбранного вендора (старый — оставляем для совместимости)
     async getAvailableModels(vendorName, whereClause, params, table) {
+        const safeTable = this._normalizeTable(table);
         const vendorColumn = this.getColumnName(table, 'vendor_name');
         const modelColumn = this.getColumnName(table, 'model_name');
         const modelIdColumn = this.getColumnName(table, 'model_id');
@@ -944,7 +940,7 @@ class CarModel {
 
         const sql = `
             SELECT DISTINCT ${modelIdColumn} as id, ${modelColumn} as name 
-            FROM ${table} 
+            FROM ${safeTable} 
             ${whereClause}
             AND ${vendorColumn} = ?
             AND ${modelIdColumn} IS NOT NULL AND ${modelColumn} IS NOT NULL
@@ -955,13 +951,14 @@ class CarModel {
 
     // Метод для получения доступных типов топлива
     async getAvailableFuelTypes(whereClause, params, table) {
+        const safeTable = this._normalizeTable(table);
         const fuelColumn = this.getColumnName(table, 'fuel_type');
         if (!fuelColumn) return [];
 
         // Убираем обязательное условие CALC_RUB для получения всех типов топлива
         const sql = `
             SELECT DISTINCT ${fuelColumn} as code, COUNT(*) as count
-            FROM ${table}
+            FROM ${safeTable}
                 ${whereClause}
                 AND ${fuelColumn} IS NOT NULL
             GROUP BY ${fuelColumn}
@@ -996,12 +993,13 @@ class CarModel {
 
     // Метод для получения доступных трансмиссий
     async getAvailableTransmissions(whereClause, params, table) {
+        const safeTable = this._normalizeTable(table);
         const transmissionColumn = this.getColumnName(table, 'transmission');
         if (!transmissionColumn) return [];
 
         const sql = `
             SELECT DISTINCT ${transmissionColumn} as code, COUNT(*) as count
-            FROM ${table} 
+            FROM ${safeTable} 
             ${whereClause}
             AND ${transmissionColumn} IS NOT NULL AND ${transmissionColumn} != ''
             GROUP BY ${transmissionColumn}
@@ -1012,12 +1010,13 @@ class CarModel {
 
     // Метод для получения доступных приводов
     async getAvailableDrives(whereClause, params, table) {
+        const safeTable = this._normalizeTable(table);
         const driveColumn = this.getColumnName(table, 'drive');
         if (!driveColumn) return [];
 
         const sql = `
             SELECT DISTINCT ${driveColumn} as code, COUNT(*) as count
-            FROM ${table} 
+            FROM ${safeTable} 
             ${whereClause}
             AND ${driveColumn} IS NOT NULL AND ${driveColumn} != ''
             GROUP BY ${driveColumn}
@@ -1148,13 +1147,14 @@ class CarModel {
     }
 
     async getCarsByFilter(filters = {}, table = 'main', limit = 100, offset = 0) {
+        const safeTable = this._normalizeTable(table);
         let whereConditions = [
             'deleted = 0'
         ];
         let params = [];
 
         // Получаем маппинг колонок для текущей таблицы
-        const columns = this.tableColumns[table];
+        const columns = this.tableColumns[safeTable];
 
         // Динамическое построение условий WHERE
         const filterMap = {};
@@ -1229,7 +1229,7 @@ class CarModel {
         }
 
         const sql = `
-        SELECT * FROM ${table}
+        SELECT * FROM ${safeTable}
         ${whereClause}
         ORDER BY ${orderByClause}
         LIMIT ? OFFSET ?
@@ -1242,7 +1242,7 @@ class CarModel {
         params.push(lim, off);
 
         // Добавим детальные логи для дебага (временное, можно закомментировать позже)
-        console.log('getCarsByFilter: table=', table, 'filters=', filters);
+        console.log('getCarsByFilter: table=', safeTable, 'filters=', filters);
         console.log('getCarsByFilter: WHERE clause=', whereClause);
         console.log('getCarsByFilter: SQL=', sql);
         console.log('getCarsByFilter: params=', params);
@@ -1262,10 +1262,11 @@ class CarModel {
     // Метод для получения вендоров и моделей
     async getVendorsAndModels(table = 'main') {
         try {
+            const safeTable = this._normalizeTable(table);
             // Получаем уникальные вендоры
             const vendorsSql = `
                 SELECT DISTINCT MARKA_ID, MARKA_NAME 
-                FROM ${table} 
+                FROM ${safeTable} 
                 WHERE deleted = 0 AND MARKA_ID IS NOT NULL AND MARKA_NAME IS NOT NULL
                 ORDER BY MARKA_NAME
             `;
@@ -1278,7 +1279,7 @@ class CarModel {
             for (const vendor of vendors) {
                 const modelsSql = `
                     SELECT DISTINCT MODEL_ID, MODEL_NAME 
-                    FROM ${table} 
+                    FROM ${safeTable} 
                     WHERE deleted = 0 
                     AND MARKA_ID = ? 
                     AND MODEL_ID IS NOT NULL 
@@ -1308,9 +1309,10 @@ class CarModel {
     // Метод для получения только вендоров
     async getVendors(table = 'main') {
         try {
+            const safeTable = this._normalizeTable(table);
             const sql = `
                 SELECT DISTINCT MARKA_ID as vendor_id, MARKA_NAME as vendor_name 
-                FROM ${table} 
+                FROM ${safeTable} 
                 WHERE deleted = 0 AND MARKA_ID IS NOT NULL AND MARKA_NAME IS NOT NULL
                 ORDER BY MARKA_NAME
             `;
@@ -1325,9 +1327,10 @@ class CarModel {
     // Метод для получения моделей конкретного вендора
     async getModelsByVendor(vendorId, table = 'main') {
         try {
+            const safeTable = this._normalizeTable(table);
             const sql = `
                 SELECT DISTINCT MODEL_ID as model_id, MODEL_NAME as model_name 
-                FROM ${table} 
+                FROM ${safeTable} 
                 WHERE deleted = 0 
                 AND MARKA_ID = ? 
                 AND MODEL_ID IS NOT NULL 
@@ -1395,21 +1398,27 @@ class CarModel {
     }
 
     async updateCarPrice(carId, priceCalc, calcRub, table = 'main', additionalData = {}) {
+        const safeTable = this._normalizeTable(table);
+        const extraKeys = Object.keys(additionalData || {});
+        const extraSetClause = extraKeys.length > 0
+            ? `,\n                ${extraKeys.map(key => `${key} = ?`).join(',\n                ')}`
+            : '';
         const sql = `
-            UPDATE ${table}
+            UPDATE ${safeTable}
             SET PRICE_CALC = ?,
                 CALC_RUB = ?,
-                CALC_UPDATED_AT = NOW(),
-                ${Object.keys(additionalData).map(key => `${key} = ?`).join(', ')}
+                CALC_UPDATED_AT = NOW()
+                ${extraSetClause}
             WHERE ID = ?
         `;
 
-        const params = [priceCalc, calcRub, ...Object.values(additionalData), carId];
+        const params = [priceCalc, calcRub, ...extraKeys.map(key => additionalData[key]), carId];
         await db.query(sql, params);
     }
 
     async insertOrUpdateCar(carData, table) {
         try {
+            const safeTable = this._normalizeTable(table);
             // Убираем поля которые могут вызвать конфликты
             const { created_at, updated_at, deleted, PRICE_CALC, CALC_RUB, CALC_UPDATED_AT, ...cleanData } = carData;
 
@@ -1424,7 +1433,7 @@ class CarModel {
                 .join(', ');
 
             const sql = `
-                INSERT INTO ${table} (${fields}, deleted, deleted_at)
+                INSERT INTO ${safeTable} (${fields}, deleted, deleted_at)
                 VALUES (${placeholders}, 0, NULL)
                     ON DUPLICATE KEY UPDATE
                                          ${updateSet},
@@ -1435,12 +1444,13 @@ class CarModel {
 
             await db.query(sql, values);
         } catch (error) {
-            console.error(`❌ Error inserting/updating car in ${table}:`, error.message);
+            console.error(`❌ Error inserting/updating car in ${this._normalizeTable(table)}:`, error.message);
             throw error;
         }
     }
 
     async bulkInsertOrUpdate(table, records) {
+        const safeTable = this._normalizeTable(table);
         if (!records || records.length === 0) {
             return { processed: 0, errors: 0 };
         }
@@ -1450,10 +1460,10 @@ class CarModel {
 
         // Используем bulk operation из database
         try {
-            const result = await db.bulkOperation(table, records, 50); // 50 записей за раз
+            const result = await db.bulkOperation(safeTable, records, 50); // 50 записей за раз
             return result;
         } catch (error) {
-            console.error(`❌ Bulk operation failed for ${table}:`, error.message);
+            console.error(`❌ Bulk operation failed for ${safeTable}:`, error.message);
 
             // Fallback: обрабатываем записи по одной
             console.log(`🔄 Falling back to individual record processing...`);
@@ -1475,7 +1485,8 @@ class CarModel {
     // Получить все локальные ID (включая deleted=0 только)
     async getLocalIds(table = 'main') {
         try {
-            const sql = `SELECT ID FROM ${table} WHERE deleted = 0`;
+            const safeTable = this._normalizeTable(table);
+            const sql = `SELECT ID FROM ${safeTable} WHERE deleted = 0`;
             const rows = await db.query(sql);
             return rows.map(r => r.ID);
         } catch (error) {
@@ -1486,6 +1497,7 @@ class CarModel {
 
     // Вставлять только новые записи, не трогая существующие
     async bulkInsertIfNotExists(table, records, batchSize = 100) {
+        const safeTable = this._normalizeTable(table);
         if (!records || records.length === 0) return { processed: 0 };
 
         let processed = 0;
@@ -1502,7 +1514,7 @@ class CarModel {
             const fields = [...allKeys, 'deleted', 'deleted_at'];
 
             const placeholders = batch.map(() => `(${fields.map(() => '?').join(',')})`).join(',');
-            const sql = `INSERT IGNORE INTO ${table} (${fields.join(',')}) VALUES ${placeholders}`;
+            const sql = `INSERT IGNORE INTO ${safeTable} (${fields.join(',')}) VALUES ${placeholders}`;
 
             // Подготавливаем значения: для каждого record берем значение по allKeys, либо NULL
             const values = [];
@@ -1518,7 +1530,7 @@ class CarModel {
                 // В mysql2 результат для INSERT содержит affectedRows
                 processed += result.affectedRows || 0;
             } catch (error) {
-                console.error(`Error inserting batch into ${table}:`, error.message);
+                console.error(`Error inserting batch into ${safeTable}:`, error.message);
             }
         }
 
@@ -1542,12 +1554,13 @@ class CarModel {
     }
     */
     async markIdsDeleted(table = 'main', ids = []) {
+        const safeTable = this._normalizeTable(table);
         if (!ids || ids.length === 0) {
-            console.log(`ℹ️ No IDs to mark as deleted in ${table}`);
+            console.log(`ℹ️ No IDs to mark as deleted in ${safeTable}`);
             return { affected: 0 };
         }
         
-        console.log(`🔄 Marking ${ids.length} records as deleted in ${table}...`);
+        console.log(`🔄 Marking ${ids.length} records as deleted in ${safeTable}...`);
         
         const batchSize = 1000;
         let totalAffected = 0;
@@ -1556,7 +1569,7 @@ class CarModel {
             const batchIds = ids.slice(i, i + batchSize);
             const placeholders = batchIds.map(() => '?').join(',');
             
-            const sql = `UPDATE ${table} SET deleted = 1, updated_at = NOW() WHERE ID IN (${placeholders})`;
+            const sql = `UPDATE ${safeTable} SET deleted = 1, deleted_at = NOW(), updated_at = NOW() WHERE ID IN (${placeholders})`;
             
             try {
                 // Просто логируем что происходит
@@ -1586,28 +1599,30 @@ class CarModel {
             }
         }
 
-        console.log(`🎯 Total marked as deleted in ${table}: ${totalAffected}`);
+        console.log(`🎯 Total marked as deleted in ${safeTable}: ${totalAffected}`);
         return { affected: totalAffected };
     }
 
     // Оптимизировать таблицу и проанализировать индексы
     async optimizeTable(table = 'main') {
         try {
-            console.log(`DB: Optimizing table ${table}...`);
+            const safeTable = this._normalizeTable(table);
+            console.log(`DB: Optimizing table ${safeTable}...`);
             // OPTIMIZE и ANALYZE - безопасно обёрнуты в try/catch
-            await db.query(`OPTIMIZE TABLE ${table}`);
-            await db.query(`ANALYZE TABLE ${table}`);
-            console.log(`DB: Optimization complete for ${table}`);
+            await db.query(`OPTIMIZE TABLE ${safeTable}`);
+            await db.query(`ANALYZE TABLE ${safeTable}`);
+            console.log(`DB: Optimization complete for ${safeTable}`);
             return true;
         } catch (error) {
-            console.error(`DB: Failed to optimize/analyze ${table}:`, error.message);
+            console.error(`DB: Failed to optimize/analyze ${this._normalizeTable(table)}:`, error.message);
             return false;
         }
     }
 
     async getCarsForCalculation(table, limit = 0, hoursOld = 24, offset = 0) {
+        const safeTable = this._normalizeTable(table);
         let sql = `
-            SELECT * FROM ${table}
+            SELECT * FROM ${safeTable}
             WHERE deleted = 0
               AND (CALC_UPDATED_AT IS NULL OR CALC_UPDATED_AT < DATE_SUB(NOW(), INTERVAL ? HOUR))
             ORDER BY CALC_UPDATED_AT ASC
@@ -1628,12 +1643,13 @@ class CarModel {
     }
 
     async getPriceRange(table, filters = {}) {
+        const safeTable = this._normalizeTable(table);
         let whereConditions = [
             'deleted = 0',
         ];
         let params = [];
 
-        const columns = this.tableColumns[table];
+        const columns = this.tableColumns[safeTable];
         const filterMap = {
             vendor: 'MARKA_NAME =',
             model: 'MODEL_NAME =',
@@ -1666,7 +1682,7 @@ class CarModel {
             whereConditions.push('CALC_RUB IS NOT NULL');
         }
 
-        if(table !== 'bike') {
+        if(safeTable !== 'bike') {
             whereConditions.push('(FINISH != 0 OR AVG_PRICE != 0)');
         } else {
             whereConditions.push('(START != 0 OR FINISH != 0)');
@@ -1680,7 +1696,7 @@ class CarModel {
                 MIN(CALC_RUB) as min_price,
                 MAX(CALC_RUB) as max_price,
                 COUNT(*) as total_count
-            FROM ${table}
+            FROM ${safeTable}
                      ${whereClause}
         `;
 
@@ -1697,7 +1713,7 @@ class CarModel {
 
     // Добавьте эти методы в класс:
     isSpecialFilter(key) {
-        return ['transmission_group', 'drive'].includes(key);
+        return ['fuel_type', 'transmission_group', 'drive'].includes(key);
     }
 
     processSpecialFilter(key, value, whereConditions, params, columns) {
@@ -1735,24 +1751,27 @@ class CarModel {
     }
 
     async getTotalCount(table) {
-        const sql = `SELECT COUNT(*) as count FROM ${table} WHERE deleted = 0`;
+        const safeTable = this._normalizeTable(table);
+        const sql = `SELECT COUNT(*) as count FROM ${safeTable} WHERE deleted = 0`;
         const rows = await db.query(sql);
         return rows[0]?.count || 0;
     }
 
     async markAllAsDeleted(table) {
-        const sql = `UPDATE ${table} SET deleted = 1, deleted_at = NOW(), updated_at = CURRENT_TIMESTAMP WHERE deleted = 0`;
+        const safeTable = this._normalizeTable(table);
+        const sql = `UPDATE ${safeTable} SET deleted = 1, deleted_at = NOW(), updated_at = CURRENT_TIMESTAMP WHERE deleted = 0`;
         await db.query(sql);
     }
 
     async cleanupDeleted(table, olderThanHours = 1) {
         try {
+            const safeTable = this._normalizeTable(table);
             const hours = Number.isFinite(Number(olderThanHours)) ? parseInt(olderThanHours) : 1;
-            const sql = `DELETE FROM ${table} WHERE deleted = 1 AND deleted_at < DATE_SUB(NOW(), INTERVAL ${hours} HOUR)`;
+            const sql = `DELETE FROM ${safeTable} WHERE deleted = 1 AND deleted_at < DATE_SUB(NOW(), INTERVAL ${hours} HOUR)`;
             const result = await db.query(sql);
             return result.affectedRows || 0;
         } catch (error) {
-            console.error(`Error cleaning up deleted records for ${table}:`, error.message);
+            console.error(`Error cleaning up deleted records for ${this._normalizeTable(table)}:`, error.message);
             return 0;
         }
     }
