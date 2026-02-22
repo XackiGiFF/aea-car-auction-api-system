@@ -67,9 +67,15 @@ class CarModel {
 
             // Г. Сохраняем в фоне (обновляем данные, не трогая цены)
             if (this._shouldSyncWithDatabase(provider, table)) {
-                this.saveCarsToDatabase(cars, table).catch(err =>
+                const syncPromise = this.saveCarsToDatabase(cars, table).catch(err =>
                     console.error(`[Background] Error saving cars to ${table}:`, err.message)
                 );
+
+                // Для Китая держим синхронную запись, чтобы fallback по ID сразу видел те же поля,
+                // что и только что отданный список (важно при нестабильном AJES).
+                if (provider === 'ajes' && table === 'china') {
+                    await syncPromise;
+                }
             }
 
             return rawCars.map(car => this._normalizeCarData(car));
@@ -121,12 +127,24 @@ class CarModel {
             }
 
             // Если в API нет, можно попробовать поискать в локальной БД как fallback
-            return await this._getLocalCarById(carId, table);
+            const localCar = await this._getLocalCarById(carId, table);
+            if (!localCar) {
+                return null;
+            }
+
+            const mappedLocalCar = this._mapLocalFallbackCar(localCar, provider);
+            return this._normalizeCarData(mappedLocalCar);
 
         } catch (error) {
             console.error('Error getting car by ID:', error.message);
             // Fallback to local DB
-            return this._normalizeCarData(this._getLocalCarById(carId, table));
+            const localCar = await this._getLocalCarById(carId, table);
+            if (!localCar) {
+                return null;
+            }
+
+            const mappedLocalCar = this._mapLocalFallbackCar(localCar, provider);
+            return this._normalizeCarData(mappedLocalCar);
         }
     }
 
@@ -138,7 +156,7 @@ class CarModel {
         try {
             connection = await db.getConnection();
             const [rows] = await connection.execute(
-                `SELECT CALC_RUB, CALC_UPDATED_AT FROM ${table} WHERE ID = ?`,
+                `SELECT CALC_RUB, CALC_UPDATED_AT FROM ${table} WHERE BINARY ID = ?`,
                 [carId]
             );
 
@@ -263,9 +281,26 @@ class CarModel {
 
     async _getLocalCarById(carId, table) {
         try {
-            const rows = await db.query(`SELECT * FROM ${table} WHERE ID = ?`, [carId]);
+            const rows = await db.query(`SELECT * FROM ${table} WHERE BINARY ID = ? LIMIT 1`, [carId]);
             return rows.length > 0 ? rows[0] : null;
         } catch (e) { return null; }
+    }
+
+    _mapLocalFallbackCar(car, provider = 'ajes') {
+        if (!car) {
+            return null;
+        }
+
+        try {
+            const providerInstance = ProviderFactory.getProvider(provider);
+            if (providerInstance?.mapper?.mapCarData) {
+                return providerInstance.mapper.mapCarData(car);
+            }
+        } catch (error) {
+            console.warn(`[DB Fallback] Failed to map local car data for provider ${provider}:`, error.message);
+        }
+
+        return car;
     }
 
     async getVendors(table = 'main', provider = 'ajes', clientIP) {

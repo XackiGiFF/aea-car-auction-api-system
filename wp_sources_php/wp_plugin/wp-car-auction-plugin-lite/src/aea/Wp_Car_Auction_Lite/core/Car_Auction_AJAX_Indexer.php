@@ -218,7 +218,7 @@ class Car_Auction_AJAX_Indexer {
             }
 
             // First, check if auto post already exists
-            $existing_auto = $this->find_existing_auto_post($car_id);
+            $existing_auto = $this->find_existing_auto_post($car_id, $market);
             
             if ($existing_auto) {
                 // Post exists, return its URL
@@ -283,12 +283,21 @@ class Car_Auction_AJAX_Indexer {
     /**
      * Find existing auto post by car_auction_id
      */
-    private function find_existing_auto_post($car_id): int|\WP_Post|null
+    private function find_existing_auto_post($car_id, $market): int|\WP_Post|null
     {
         $existing_posts = get_posts(array(
             'post_type' => 'auto',
-            'meta_key' => '_car_auction_id',
-            'meta_value' => $car_id,
+            'meta_query' => array(
+                'relation' => 'AND',
+                array(
+                    'key' => '_car_auction_id',
+                    'value' => $car_id
+                ),
+                array(
+                    'key' => '_car_auction_market',
+                    'value' => $market
+                )
+            ),
             'post_status' => 'publish',
             'numberposts' => 1
         ));

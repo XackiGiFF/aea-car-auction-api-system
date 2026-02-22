@@ -378,10 +378,23 @@ class AJESProvider extends BaseProvider {
     }
 
     async getCarById(carId, table = 'main', clientIP) {
-        const sql = `SELECT * FROM ${table} WHERE id = '${carId}' LIMIT 1`;
-        console.log(`[AJES] SQL for getCarById: ${sql}`);
+        const escapedId = String(carId).replace(/'/g, "''");
+        const selectColumns = table === 'bike'
+            ? 'id, MARKA_NAME, MODEL_NAME, YEAR, ENG_V, MILEAGE, START, FINISH, IMAGES, RATE, AUCTION, AUCTION_DATE, LOT_NUM, STATUS'
+            : 'id, MARKA_NAME, MODEL_NAME, YEAR, ENG_V, PW, TIME, MILEAGE, KPP, PRIV, START, FINISH, AVG_PRICE, IMAGES, RATE, AUCTION, AUCTION_DATE, LOT, STATUS';
 
-        const data = await this.makeRequest(sql, clientIP);
+        // Сначала запрашиваем точное совпадение ID с учетом регистра.
+        const strictSql = `SELECT ${selectColumns} FROM ${table} WHERE BINARY id = '${escapedId}' ORDER BY id DESC LIMIT 1`;
+        console.log(`[AJES] SQL for getCarById (strict): ${strictSql}`);
+
+        let data = await this.makeRequest(strictSql, clientIP);
+        if (!data || data.length === 0) {
+            // Фолбэк на обычное сравнение, если BINARY не поддержан или запись не найдена.
+            const fallbackSql = `SELECT ${selectColumns} FROM ${table} WHERE id = '${escapedId}' ORDER BY id DESC LIMIT 1`;
+            console.log(`[AJES] SQL for getCarById (fallback): ${fallbackSql}`);
+            data = await this.makeRequest(fallbackSql, clientIP);
+        }
+
         if (data && data.length > 0) {
             return this.mapper.mapCarData(data[0]);
         }

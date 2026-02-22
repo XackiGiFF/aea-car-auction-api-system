@@ -635,8 +635,12 @@ class Car_Auction_API {
      * Get fuel type name by code
      */
     public function get_fuel_name($fuel_code) {
+        $raw_code = is_scalar($fuel_code) ? trim((string)$fuel_code) : '';
+        $normalized_code = strtoupper($raw_code);
+
         // P — бензин, D — дизель, E — электро, H — гибрид, HE — гибрид с электроприводом, L — сжиженный нефтяной газ, C — сжатый природный газ, O — другое
         $fuel_types = array(
+            'B' => 'Бензин',
             'G' => 'Бензин',
             'P' => 'Бензин',
             'D' => 'Дизель',
@@ -650,6 +654,6 @@ class Car_Auction_API {
             '' => '—'
         );
 
-        return isset($fuel_types[$fuel_code]) ? $fuel_types[$fuel_code] : ($fuel_code ?: '—');
+        return isset($fuel_types[$normalized_code]) ? $fuel_types[$normalized_code] : ($raw_code ?: '—');
     }
 }
