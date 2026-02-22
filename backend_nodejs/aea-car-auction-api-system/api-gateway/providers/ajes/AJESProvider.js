@@ -311,7 +311,7 @@ class AJESProvider extends BaseProvider {
 
         // --- FUEL ---
         if (cols.fuel_type) {
-            const fuelVal = filters.fuel_type || filters.fuel_group;
+            const fuelVal = filters.fuel_type || filters.fuel_group || filters.fuel;
             if (fuelVal) {
                 const mapped = this.searchMappings.fuel[fuelVal.toLowerCase()];
                 if (mapped) {
