@@ -43,6 +43,12 @@ class Che168Parser {
         this.deepseekMaxRetries = Math.max(1, Number(process.env.DEEPSEEK_MAX_RETRIES || 2));
         this.deepseekRetryDelayMs = Math.max(500, Number(process.env.DEEPSEEK_RETRY_DELAY_MS || 1500));
         this.deepseekTranslationCache = new Map();
+        this.translationCacheFile = process.env.CHE_TRANSLATION_CACHE_FILE
+            || path.join(__dirname, '..', 'data', 'che-translations.cache.json');
+        this.translationFileCache = { brand: {}, model: {} };
+        this.translationCacheLoaded = false;
+        this.translationCacheLoadingPromise = null;
+        this.translationCacheWritePromise = Promise.resolve();
         this.deepseekSystemPrompt = [
             'You are an automotive name translator.',
             'Translate exactly one car brand or model name into English.',
@@ -548,6 +554,112 @@ class Che168Parser {
         return Boolean(this.deepseekEnabled && this.deepseekApiKey);
     }
 
+    normalizeTranslationKind(kind) {
+        return kind === 'brand' ? 'brand' : 'model';
+    }
+
+    normalizeTranslationCacheKey(value) {
+        return String(value || '')
+            .replace(/[\u00A0\s]+/g, ' ')
+            .trim()
+            .toUpperCase();
+    }
+
+    async ensureTranslationCacheLoaded() {
+        if (this.translationCacheLoaded) {
+            return;
+        }
+        if (this.translationCacheLoadingPromise) {
+            await this.translationCacheLoadingPromise;
+            return;
+        }
+
+        this.translationCacheLoadingPromise = (async () => {
+            try {
+                const raw = await fs.readFile(this.translationCacheFile, 'utf8');
+                const parsed = JSON.parse(raw || '{}');
+                this.translationFileCache = {
+                    brand: parsed?.brand && typeof parsed.brand === 'object' ? parsed.brand : {},
+                    model: parsed?.model && typeof parsed.model === 'object' ? parsed.model : {}
+                };
+                this.log('Loaded translation cache file', {
+                    file: this.translationCacheFile,
+                    brand_entries: Object.keys(this.translationFileCache.brand).length,
+                    model_entries: Object.keys(this.translationFileCache.model).length
+                });
+            } catch (error) {
+                if (error.code !== 'ENOENT') {
+                    this.log(`Failed to load translation cache file: ${error.message}`);
+                }
+            } finally {
+                this.translationCacheLoaded = true;
+                this.translationCacheLoadingPromise = null;
+            }
+        })();
+
+        await this.translationCacheLoadingPromise;
+    }
+
+    getTranslationFromCache(kind, sourceText) {
+        const normalizedKind = this.normalizeTranslationKind(kind);
+        const key = this.normalizeTranslationCacheKey(sourceText);
+        if (!key) return '';
+
+        const runtimeKey = `${normalizedKind}::${key}`;
+        if (this.deepseekTranslationCache.has(runtimeKey)) {
+            return this.deepseekTranslationCache.get(runtimeKey);
+        }
+
+        const fromFile = this.translationFileCache?.[normalizedKind]?.[key] || '';
+        if (fromFile) {
+            this.deepseekTranslationCache.set(runtimeKey, fromFile);
+            return fromFile;
+        }
+
+        return '';
+    }
+
+    async saveTranslationToCache(kind, sourceText, translatedText) {
+        const normalizedKind = this.normalizeTranslationKind(kind);
+        const key = this.normalizeTranslationCacheKey(sourceText);
+        if (!key) return;
+
+        const translated = this.normalizeDeepSeekOutput(translatedText, { kind: normalizedKind });
+        if (!translated) return;
+
+        const runtimeKey = `${normalizedKind}::${key}`;
+        this.deepseekTranslationCache.set(runtimeKey, translated);
+
+        if (this.translationFileCache[normalizedKind][key] === translated) {
+            return;
+        }
+
+        this.translationFileCache[normalizedKind][key] = translated;
+        await this.persistTranslationCacheToFile();
+    }
+
+    async persistTranslationCacheToFile() {
+        const payload = JSON.stringify({
+            version: 1,
+            updated_at: new Date().toISOString(),
+            brand: this.translationFileCache.brand || {},
+            model: this.translationFileCache.model || {}
+        }, null, 2);
+
+        const filePath = this.translationCacheFile;
+        const tmpPath = `${filePath}.tmp`;
+
+        this.translationCacheWritePromise = this.translationCacheWritePromise.then(async () => {
+            await fs.mkdir(path.dirname(filePath), { recursive: true });
+            await fs.writeFile(tmpPath, payload, 'utf8');
+            await fs.rename(tmpPath, filePath);
+        }).catch((error) => {
+            this.log(`Failed to persist translation cache: ${error.message}`);
+        });
+
+        await this.translationCacheWritePromise;
+    }
+
     normalizeDeepSeekOutput(value, options = {}) {
         const lines = String(value || '')
             .split(/\r?\n/)
@@ -602,9 +714,17 @@ class Che168Parser {
     async translateNameWithDeepSeek(sourceText, options = {}) {
         const input = String(sourceText || '').trim();
         if (!input) return '';
+        const kind = this.normalizeTranslationKind(options.kind);
+
+        await this.ensureTranslationCacheLoaded();
+
+        const fromCache = this.getTranslationFromCache(kind, input);
+        if (fromCache) {
+            return fromCache;
+        }
         if (!this.shouldUseDeepSeek()) return '';
 
-        const cacheKey = `${options.kind || 'name'}::${input}`;
+        const cacheKey = `${kind}::${this.normalizeTranslationCacheKey(input)}`;
         if (this.deepseekTranslationCache.has(cacheKey)) {
             return this.deepseekTranslationCache.get(cacheKey);
         }
@@ -629,14 +749,14 @@ class Che168Parser {
                 });
 
                 const raw = response?.data?.choices?.[0]?.message?.content || '';
-                const translated = this.normalizeDeepSeekOutput(raw, options);
+                const translated = this.normalizeDeepSeekOutput(raw, { ...options, kind });
                 if (translated) {
-                    this.deepseekTranslationCache.set(cacheKey, translated);
+                    await this.saveTranslationToCache(kind, input, translated);
                     return translated;
                 }
             } catch (error) {
                 this.log(`DeepSeek translation error (attempt ${attempt}/${this.deepseekMaxRetries})`, {
-                    kind: options.kind || 'name',
+                    kind,
                     source: input,
                     error: error.message
                 });
@@ -872,6 +992,10 @@ class Che168Parser {
             if (this.brandTranslations[candidate]) {
                 return this.brandTranslations[candidate];
             }
+            const fromCache = this.getTranslationFromCache('brand', candidate);
+            if (fromCache) {
+                return fromCache;
+            }
             if (!this.containsNonAscii(candidate)) {
                 return candidate.toUpperCase();
             }
@@ -906,6 +1030,10 @@ class Che168Parser {
                     return en.toUpperCase();
                 }
             }
+            const fromCache = this.getTranslationFromCache('model', raw);
+            if (fromCache) {
+                return fromCache;
+            }
         }
 
         const fromSlug = this.modelFromSlug(puppeteerDetails.model_slug || '');
@@ -926,6 +1054,11 @@ class Che168Parser {
         const brandRawCn = (apiCar.BrandName || '').trim();
         if (brandRawCn) {
             cleaned = cleaned.replace(new RegExp(`^${this.escapeRegex(brandRawCn)}\\s*`, 'u'), '');
+        }
+
+        const fromCleanedCache = this.getTranslationFromCache('model', cleaned);
+        if (fromCleanedCache) {
+            return fromCleanedCache;
         }
 
         const modelCodeMatch = cleaned.match(/[A-Za-z][A-Za-z0-9\-+]{0,20}/g);
@@ -1784,6 +1917,7 @@ class Che168Parser {
     // Преобразование данных автомобиля в формат для базы данных
     async prepareCarData(apiCar, puppeteerDetails) {
         try {
+            await this.ensureTranslationCacheLoaded();
             const normalizedDetails = puppeteerDetails || {};
 
             // Применяем нормализацию бренда/модели без иероглифов.

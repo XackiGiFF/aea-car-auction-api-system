@@ -28,6 +28,10 @@
   - `PURGE_DELETED_ENABLED=true`
   - `PURGE_DELETED_AFTER_HOURS=48`
   - `PURGE_DELETED_BATCH_SIZE=5000`
+- AI fallback для неизвестных марок/моделей:
+  - `DEEPSEEK_ENABLED=true`
+  - `DEEPSEEK_API_KEY=<secret>`
+  - `CHE_TRANSLATION_CACHE_FILE=/app/data/che-translations.cache.json` (переводы кэшируются в JSON и используются до повторного запроса к AI)
 
 ## Что делает воркер
 
