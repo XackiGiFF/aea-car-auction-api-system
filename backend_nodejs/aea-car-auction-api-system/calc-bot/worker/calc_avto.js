@@ -205,6 +205,12 @@ class CalcAvtoScheduler {
             .replace(/([?&]code=)[^&]*/i, '$1***');
     }
 
+    escapeSqlLiteral(value) {
+        return String(value || '')
+            .replace(/\\/g, '\\\\')
+            .replace(/'/g, "''");
+    }
+
     // Sleep helper
     sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -733,7 +739,9 @@ class CalcAvtoScheduler {
 
             if (mark && model) {
                 // ВТОРОЙ ЗАПРОС - поиск аналогичных машин
-                const similarSql = `SELECT PW FROM ${table} WHERE MARKA_NAME = '${mark}' AND MODEL_NAME = '${model}' AND PW != '' AND PW IS NOT NULL LIMIT 5`;
+                const safeMark = this.escapeSqlLiteral(mark);
+                const safeModel = this.escapeSqlLiteral(model);
+                const similarSql = `SELECT PW FROM ${table} WHERE MARKA_NAME = '${safeMark}' AND MODEL_NAME = '${safeModel}' AND PW != '' AND PW IS NOT NULL LIMIT 5`;
                 const similarParams = new URLSearchParams({
                     ip: process.env.API_IP,
                     code: process.env.API_CODE,
@@ -760,9 +768,8 @@ class CalcAvtoScheduler {
             }
 
             // ЕСЛИ АНАЛОГИ НЕ НАЙДЕНЫ - используем дефолт для электромобилей
-            this.debugLog(market, `[POWER_API] ⚡ Using default power for electric car`);
-            //return 150; // Дефолтная мощность для электромобилей
-            return null;
+            this.debugLog(market, `[POWER_API] ⚡ Similar cars not found, fallback power=150`);
+            return 150;
 
         } catch (error) {
             this.debugLog(market, `[POWER_API] ❌ Failed for ${carId}: ${error.message}`);
@@ -818,7 +825,8 @@ class CalcAvtoScheduler {
             }
         }
 
-        if(power === 0) {
+        if (!Number.isFinite(power) || power <= 0) {
+            this.debugLog(market, `[CALC_AVTO] Invalid power for ${car.ID}: ${power}, skipping`);
             return null; // Пропускаем расчет полностью
         }
         
@@ -1119,8 +1127,8 @@ class CalcAvtoScheduler {
             return maxStartFinish;
         }
 
-        // Fallback: если все поля нулевые
-        return 100000;
+        // Если валидной цены нет - не рассчитываем
+        return null;
     }
 }
 

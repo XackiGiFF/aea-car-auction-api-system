@@ -39,6 +39,10 @@ class Database {
         ]);
     }
 
+    _isSafeSqlIdentifier(name) {
+        return typeof name === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+    }
+
     async init() {
         if (this.pool) return this.pool;
 
@@ -140,6 +144,9 @@ class Database {
     // Метод для массовой вставки/обновления
     async bulkOperation(table, records, batchSize = 100) {
         if (!records || records.length === 0) return { processed: 0, errors: 0 };
+        if (!this._isSafeSqlIdentifier(table)) {
+            throw new Error(`Unsafe table identifier: ${table}`);
+        }
 
         let processed = 0;
         let errors = 0;
@@ -157,20 +164,26 @@ class Database {
 
                     for (const record of batch) {
                         try {
-                            const fields = Object.keys(record).join(', ');
-                            const values = Object.values(record);
-                            const placeholders = Object.keys(record).map(() => '?').join(', ');
+                            const safeKeys = Object.keys(record).filter((key) => this._isSafeSqlIdentifier(key));
+                            if (safeKeys.length === 0) {
+                                continue;
+                            }
 
-                            const updateSet = Object.keys(record)
+                            const fields = safeKeys.join(', ');
+                            const values = safeKeys.map((key) => record[key]);
+                            const placeholders = safeKeys.map(() => '?').join(', ');
+
+                            const updateSet = safeKeys
                                 .filter(key => !['ID', 'created_at'].includes(key))
                                 .map(key => `${key} = VALUES(${key})`)
                                 .join(', ');
+                            const updatePrefix = updateSet ? `${updateSet},` : '';
 
                             const sql = `
                                 INSERT INTO ${table} (${fields}, deleted) 
                                 VALUES (${placeholders}, 0)
                                 ON DUPLICATE KEY UPDATE 
-                                    ${updateSet},
+                                    ${updatePrefix}
                                     updated_at = CURRENT_TIMESTAMP,
                                     deleted = 0
                             `;

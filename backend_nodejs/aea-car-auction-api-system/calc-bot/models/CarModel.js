@@ -3,7 +3,7 @@ const axios = require('axios');
 
 class CarModel {
     constructor() {
-        this.tables = ['main', 'korea', 'china', 'bike'];
+        this.tables = ['main', 'korea', 'china', 'bike', 'che_available'];
         // Маппинг колонок для разных таблиц
         this.tableColumns = {
             main: {
@@ -27,6 +27,16 @@ class CarModel {
                 mileage: 'MILEAGE'
             },
             china: {
+                vendor_id: 'MARKA_ID',
+                vendor_name: 'MARKA_NAME',
+                model_id: 'MODEL_ID',
+                model_name: 'MODEL_NAME',
+                fuel_type: 'TIME',
+                transmission: 'KPP',
+                drive: 'PRIV',
+                mileage: 'MILEAGE'
+            },
+            che_available: {
                 vendor_id: 'MARKA_ID',
                 vendor_name: 'MARKA_NAME',
                 model_id: 'MODEL_ID',
@@ -188,6 +198,10 @@ class CarModel {
         this._startBackgroundRefresh();
     }
 
+    _isSafeSqlIdentifier(name) {
+        return typeof name === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+    }
+
     async bulkUpdatePrices(table, records) {
         const safeTable = this._normalizeTable(table);
         let updatedCount = 0;
@@ -244,10 +258,11 @@ class CarModel {
 
     // --- CACHE HELPERS ---
     _makeDynamicCacheKey(currentFilters = {}, table = 'main') {
+        const safeTable = this._normalizeTable(table);
         const v = (currentFilters.vendor || '').toString().toUpperCase();
         const m = (currentFilters.model || '').toString();
         const o = (currentFilters.only_calculated || '').toString();
-        return `${table}|${v}|${m}|${o}`;
+        return `${safeTable}|${v}|${m}|${o}`;
     }
 
     _isFresh(entry, ttl) {
@@ -497,6 +512,49 @@ class CarModel {
                     INDEX idx_calc_updated (CALC_UPDATED_AT)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             `,
+            che_available: `
+                CREATE TABLE IF NOT EXISTS che_available (
+                    ID VARCHAR(50) PRIMARY KEY,
+                    LOT VARCHAR(50),
+                    AUCTION_DATE DATETIME,
+                    AUCTION VARCHAR(255),
+                    MARKA_ID VARCHAR(10),
+                    MODEL_ID VARCHAR(10),
+                    MARKA_NAME VARCHAR(255),
+                    MODEL_NAME VARCHAR(255),
+                    YEAR VARCHAR(4),
+                    ENG_V VARCHAR(10),
+                    PW VARCHAR(255),
+                    KUZOV VARCHAR(255),
+                    GRADE VARCHAR(255),
+                    COLOR VARCHAR(30),
+                    KPP VARCHAR(255),
+                    KPP_TYPE VARCHAR(255),
+                    PRIV VARCHAR(255),
+                    MILEAGE VARCHAR(20),
+                    EQUIP TEXT,
+                    RATE VARCHAR(10),
+                    START VARCHAR(10),
+                    FINISH VARCHAR(10),
+                    STATUS VARCHAR(20),
+                    TIME VARCHAR(10),
+                    AVG_PRICE VARCHAR(20),
+                    AVG_STRING TEXT,
+                    IMAGES TEXT,
+                    PRICE_CALC DECIMAL(15,2) NULL,
+                    CALC_RUB DECIMAL(15,2) NULL,
+                    CALC_UPDATED_AT TIMESTAMP NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    deleted TINYINT(1) DEFAULT 0,
+                    deleted_at TIMESTAMP NULL,
+                    INDEX idx_auction_date (AUCTION_DATE),
+                    INDEX idx_marka_model (MARKA_NAME, MODEL_NAME),
+                    INDEX idx_price_calc (PRICE_CALC),
+                    INDEX idx_calc_rub (CALC_RUB),
+                    INDEX idx_calc_updated (CALC_UPDATED_AT)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            `,
             bike: `
                 CREATE TABLE IF NOT EXISTS bike (
                     ID VARCHAR(50) PRIMARY KEY,
@@ -681,10 +739,11 @@ class CarModel {
     // Новый публичный метод: getDynamicFilters с кэшированием и фоновым обновлением
     async getDynamicFilters(currentFilters = {}, table = 'main') {
         try {
+            const safeTable = this._normalizeTable(table);
             // Нормализуем вход
             if (currentFilters.vendor) currentFilters.vendor = currentFilters.vendor.toString().toUpperCase();
 
-            const cacheKey = this._makeDynamicCacheKey(currentFilters, table);
+            const cacheKey = this._makeDynamicCacheKey(currentFilters, safeTable);
             const cached = this.dynamicFiltersCache[cacheKey];
 
             // Если кэш свежий (меньше 24 часо��), возвращаем его немедленно
@@ -700,18 +759,19 @@ class CarModel {
             }
 
             // Иначе вычисляем свежие фильтры и сохраняем в кэше
-            const filters = await this._computeDynamicFilters(currentFilters, table);
+            const filters = await this._computeDynamicFilters(currentFilters, safeTable);
             this.dynamicFiltersCache[cacheKey] = { data: filters, updatedAt: Date.now() };
             return filters;
         } catch (error) {
             console.error('Error getting dynamic filters (cached):', error.message);
-            return this.getFallbackFilters(table);
+            return this.getFallbackFilters(this._normalizeTable(table));
         }
     }
 
     // Внутренняя функция вычисления фильтров (оригинальная логика с минимальными правками)
     async _computeDynamicFilters(currentFilters = {}, table = 'main') {
         try {
+            const safeTable = this._normalizeTable(table);
             let whereConditions = [
                 'deleted = 0'
             ];
@@ -720,7 +780,7 @@ class CarModel {
             // Базовое условие - не удаленные записи (уже добавлено выше)
 
             // Получаем маппинг колонок для текущей таблицы
-            const columns = this.tableColumns[table];
+            const columns = this.tableColumns[safeTable];
 
             // Базовые условия фильтрации (только для существующих колонок)
             const filterMap = {};
@@ -731,7 +791,7 @@ class CarModel {
                 filterMap.mileage_to = `CAST(REPLACE(${columns.mileage}, ",", "") AS UNSIGNED) <=`;
             }
 
-            if(table !== 'bike') {
+            if(safeTable !== 'bike') {
                 whereConditions.push('(FINISH != 0 OR AVG_PRICE != 0)');
             } else {
                 whereConditions.push('(START != 0 OR FINISH != 0)');
@@ -755,15 +815,15 @@ class CarModel {
                 `WHERE ${whereConditions.join(' AND ')}` : '';
 
             // Получаем список брендов максимально быстро напрямую из БД
-            const vendorRows = await this.getVendors(table); // [{vendor_id, vendor_name}]
+            const vendorRows = await this.getVendors(safeTable); // [{vendor_id, vendor_name}]
             let allVendors = (vendorRows || []).map(v => v.vendor_name).filter(Boolean);
 
             // Fallback: если пусто, используем прежнюю логику (внешний сервис/локальная выборка)
             if (!allVendors || allVendors.length === 0) {
                 // РАНЕЕ: пробуем внешнюю систему, затем локальную БД
-                let extManuf = await this._fetchExternalManuf(table);
+                let extManuf = await this._fetchExternalManuf(safeTable);
                 if (!extManuf || extManuf.length === 0) {
-                    let fromDb = await this.getAvailableVendors('WHERE deleted = 0', [], table);
+                    let fromDb = await this.getAvailableVendors('WHERE deleted = 0', [], safeTable);
                     // getAvailableVendors может вернуть строки или объекты — приводим к именам
                     if (Array.isArray(fromDb) && fromDb.length > 0 && typeof fromDb[0] === 'object') {
                         allVendors = fromDb.map(v => v.vendor_name || v.name || v.vendor_id).filter(Boolean);
@@ -785,11 +845,11 @@ class CarModel {
                 // Быстрый путь: найдём vendor_id по имени и возьмём модели по ID (индексированное поле)
                 const matchedVendor = (vendorRows || []).find(v => (v.vendor_name || '').toUpperCase() === currentFilters.vendor.toUpperCase());
                 if (matchedVendor && matchedVendor.vendor_id) {
-                    const modelRows = await this.getModelsByVendor(matchedVendor.vendor_id, table);
+                    const modelRows = await this.getModelsByVendor(matchedVendor.vendor_id, safeTable);
                     models = (modelRows || []).map(m => m.model_name).filter(Boolean);
                 } else {
                     // РАНЕЕ: статический список моделей по названию бренда
-                    models = await this.getModelsForVendorStatic(currentFilters.vendor, table);
+                    models = await this.getModelsForVendorStatic(currentFilters.vendor, safeTable);
                 }
                 // Выбранная модель — первой
                 models = this.sortWithSelectedFirst(models, currentFilters.model);
@@ -797,9 +857,9 @@ class CarModel {
 
             // Получаем остальные фильтры
             const [fuelTypes, transmissions, drives] = await Promise.all([
-                columns.fuel_type ? this.getAvailableFuelTypes(whereClause, params, table) : Promise.resolve([]),
-                columns.transmission ? this.getAvailableTransmissions(whereClause, params, table) : Promise.resolve([]),
-                columns.drive ? this.getAvailableDrives(whereClause, params, table) : Promise.resolve([])
+                columns.fuel_type ? this.getAvailableFuelTypes(whereClause, params, safeTable) : Promise.resolve([]),
+                columns.transmission ? this.getAvailableTransmissions(whereClause, params, safeTable) : Promise.resolve([]),
+                columns.drive ? this.getAvailableDrives(whereClause, params, safeTable) : Promise.resolve([])
             ]);
 
             const { code, ...filtersWithoutCode } = currentFilters;
@@ -821,7 +881,7 @@ class CarModel {
             };
         } catch (error) {
             console.error('Error getting dynamic filters:', error.message);
-            return this.getFallbackFilters(table);
+            return this.getFallbackFilters(this._normalizeTable(table));
         }
     }
 
@@ -1083,7 +1143,8 @@ class CarModel {
 
 // Также обновим getFallbackFilters для соответствия
     getFallbackFilters(table) {
-        const columns = this.tableColumns[table];
+        const safeTable = this._normalizeTable(table);
+        const columns = this.tableColumns[safeTable];
 
         return {
             vendors: [],
@@ -1399,7 +1460,17 @@ class CarModel {
 
     async updateCarPrice(carId, priceCalc, calcRub, table = 'main', additionalData = {}) {
         const safeTable = this._normalizeTable(table);
-        const extraKeys = Object.keys(additionalData || {});
+        const allowedExtraColumns = new Set([
+            'original_price',
+            'original_currency',
+            'converted_price',
+            'tks_total',
+            'markup',
+            'response_time'
+        ]);
+        const extraKeys = Object.keys(additionalData || {}).filter((key) => {
+            return allowedExtraColumns.has(key) && this._isSafeSqlIdentifier(key);
+        });
         const extraSetClause = extraKeys.length > 0
             ? `,\n                ${extraKeys.map(key => `${key} = ?`).join(',\n                ')}`
             : '';
@@ -1422,21 +1493,30 @@ class CarModel {
             // Убираем поля которые могут вызвать конфликты
             const { created_at, updated_at, deleted, PRICE_CALC, CALC_RUB, CALC_UPDATED_AT, ...cleanData } = carData;
 
-            const fields = Object.keys(cleanData).join(', ');
-            const values = Object.values(cleanData);
-            const placeholders = Object.keys(cleanData).map(() => '?').join(', ');
+            const safeEntries = Object.entries(cleanData).filter(([key]) => this._isSafeSqlIdentifier(key));
+            const safeData = Object.fromEntries(safeEntries);
+            const safeKeys = Object.keys(safeData);
+
+            if (!safeData.ID) {
+                throw new Error('Missing required ID for insertOrUpdateCar');
+            }
+
+            const fields = safeKeys.join(', ');
+            const values = safeKeys.map((key) => safeData[key]);
+            const placeholders = safeKeys.map(() => '?').join(', ');
 
             // Обновляем только основные поля, но сохраняем расчетные
-            const updateSet = Object.keys(cleanData)
+            const updateSet = safeKeys
                 .filter(key => !['ID'].includes(key))
                 .map(key => `${key} = VALUES(${key})`)
                 .join(', ');
+            const updatePrefix = updateSet ? `${updateSet},` : '';
 
             const sql = `
                 INSERT INTO ${safeTable} (${fields}, deleted, deleted_at)
                 VALUES (${placeholders}, 0, NULL)
                     ON DUPLICATE KEY UPDATE
-                                         ${updateSet},
+                                         ${updatePrefix}
                                          updated_at = CURRENT_TIMESTAMP,
                                          deleted = 0,
                                          deleted_at = NULL
@@ -1507,7 +1587,12 @@ class CarModel {
             const batch = records.slice(i, i + batchSize);
 
             // Собираем набор всех полей в батче
-            const allKeys = Array.from(new Set(batch.flatMap(r => Object.keys(r))));
+            const allKeys = Array.from(new Set(batch.flatMap(r => Object.keys(r))))
+                .filter((key) => this._isSafeSqlIdentifier(key));
+
+            if (allKeys.length === 0) {
+                continue;
+            }
 
             // Убираем служебные поля, которы�� не должны быть вставлены, если их нет в данных
             // Но оставим ID и все прочие поля. Добавим столбцы deleted и deleted_at
