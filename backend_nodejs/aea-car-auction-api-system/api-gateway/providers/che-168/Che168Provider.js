@@ -149,6 +149,78 @@ class Che168Provider extends BaseProvider {
         return value == null ? '' : String(value).trim();
     }
 
+    _sanitizeFilterEchoValue(value, maxLength = 120) {
+        const normalized = this._normalizeFilterValue(value)
+            .replace(/[\u0000-\u001F\u007F]/g, '')
+            .slice(0, maxLength);
+
+        if (!normalized) {
+            return '';
+        }
+
+        // Return only non-dangerous values for UI echo (current_filters).
+        if (/[<>"'`]/.test(normalized)) {
+            return '';
+        }
+
+        return normalized;
+    }
+
+    _toSafeNumericEcho(value) {
+        const normalized = this._normalizeFilterValue(value);
+        if (normalized === '') return null;
+        const parsed = Number(normalized);
+        if (!Number.isFinite(parsed)) return null;
+        return parsed;
+    }
+
+    _buildSafeCurrentFilters(rawFilters = {}) {
+        const safeFilters = {};
+        const stringKeys = new Set([
+            'vendor',
+            'model',
+            'transmission',
+            'transmission_group',
+            'drive',
+            'drive_group',
+            'fuel',
+            'fuel_type',
+            'fuel_group'
+        ]);
+        const numericKeys = new Set([
+            'year_from',
+            'year_to',
+            'engine_from',
+            'engine_to',
+            'price_from',
+            'price_to',
+            'mileage_from',
+            'mileage_to',
+            'limit',
+            'offset',
+            'page'
+        ]);
+
+        for (const [key, value] of Object.entries(rawFilters || {})) {
+            if (stringKeys.has(key)) {
+                const safeValue = this._sanitizeFilterEchoValue(value);
+                if (safeValue) {
+                    safeFilters[key] = safeValue;
+                }
+                continue;
+            }
+
+            if (numericKeys.has(key)) {
+                const safeNumber = this._toSafeNumericEcho(value);
+                if (safeNumber !== null) {
+                    safeFilters[key] = safeNumber;
+                }
+            }
+        }
+
+        return safeFilters;
+    }
+
     _toNumber(value, parser = parseFloat) {
         const normalized = this._normalizeFilterValue(value);
         if (normalized === '') return null;
@@ -526,6 +598,7 @@ class Che168Provider extends BaseProvider {
             const transmissionRows = this._extractRows(transmissionRowsResult);
             const driveRows = this._extractRows(driveRowsResult);
             const { code, ...filtersWithoutCode } = currentFilters;
+            const safeCurrentFilters = this._buildSafeCurrentFilters(filtersWithoutCode);
 
             return {
                 vendors: vendors.map(row => row[fields.vendor]).filter(Boolean),
@@ -534,7 +607,7 @@ class Che168Provider extends BaseProvider {
                 fuel_types: fields.fuel_type ? this._formatFuelRows(fuelRows) : [],
                 transmissions: fields.transmission ? this._groupTransmissionRows(transmissionRows) : this._emptyTransmissionGroups(),
                 drives: fields.drive ? this._groupDriveRows(driveRows) : this._emptyDriveGroups(),
-                current_filters: filtersWithoutCode,
+                current_filters: safeCurrentFilters,
                 table_support: {
                     has_fuel_filter: !!fields.fuel_type,
                     has_transmission_filter: !!fields.transmission,

@@ -161,6 +161,15 @@ class AJESProvider extends BaseProvider {
         this.externalCache = {};
         this.externalCacheTTL = 30 * 60 * 1000;
         this.debugSql = process.env.AJES_DEBUG_SQL === 'true';
+        this.defaultLimit = 20;
+        this.maxLimit = (() => {
+            const parsed = Number.parseInt(process.env.API_PAGINATION_LIMIT_MAX || '200', 10);
+            return Number.isInteger(parsed) && parsed > 0 ? parsed : 200;
+        })();
+        this.maxOffset = (() => {
+            const parsed = Number.parseInt(process.env.API_PAGINATION_OFFSET_MAX || '1000000', 10);
+            return Number.isInteger(parsed) && parsed >= 0 ? parsed : 1000000;
+        })();
     }
 
     // ==================== ОСНОВНЫЕ МЕТОДЫ ====================
@@ -250,6 +259,22 @@ class AJESProvider extends BaseProvider {
     _getSafeTable(table = 'main') {
         const normalized = String(table || 'main').trim().toLowerCase();
         return this.tableColumns[normalized] ? normalized : 'main';
+    }
+
+    _normalizePagination(limitRaw, offsetRaw) {
+        let limit = Number.parseInt(limitRaw, 10);
+        if (!Number.isInteger(limit)) {
+            limit = this.defaultLimit;
+        }
+        limit = Math.min(Math.max(limit, 1), this.maxLimit);
+
+        let offset = Number.parseInt(offsetRaw, 10);
+        if (!Number.isInteger(offset)) {
+            offset = 0;
+        }
+        offset = Math.min(Math.max(offset, 0), this.maxOffset);
+
+        return { limit, offset };
     }
 
     // ==================== ФИЛЬТРЫ И ГРУППИРОВКИ ====================
@@ -413,8 +438,7 @@ class AJESProvider extends BaseProvider {
 
         sql += ' ORDER BY id DESC';
 
-        const limit = filters.limit || 20;
-        const offset = filters.offset || 0;
+        const { limit, offset } = this._normalizePagination(filters.limit, filters.offset);
         sql += ` LIMIT ${offset}, ${limit}`;
 
         return sql;

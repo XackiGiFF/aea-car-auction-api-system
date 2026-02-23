@@ -5,6 +5,11 @@ class CarModel {
     constructor() {
         this.tables = ['main', 'korea', 'china', 'bike', 'che_available'];
         this.tableColumnsCache = new Map();
+        this.pagination = {
+            defaultLimit: 20,
+            maxLimit: 200,
+            maxOffset: 1000000
+        };
     }
 
     /**
@@ -570,6 +575,36 @@ class CarModel {
         return Number.isFinite(parsed) ? parsed : null;
     }
 
+    _parseOptionalInteger(value) {
+        if (value === undefined || value === null || value === '') {
+            return null;
+        }
+
+        const raw = String(value).trim();
+        if (!/^-?\d+$/.test(raw)) {
+            return null;
+        }
+
+        const parsed = Number.parseInt(raw, 10);
+        return Number.isSafeInteger(parsed) ? parsed : null;
+    }
+
+    _normalizePagination(limitRaw, offsetRaw) {
+        let limit = this._parseOptionalInteger(limitRaw);
+        if (limit === null) {
+            limit = this.pagination.defaultLimit;
+        }
+        limit = Math.min(Math.max(limit, 1), this.pagination.maxLimit);
+
+        let offset = this._parseOptionalInteger(offsetRaw);
+        if (offset === null) {
+            offset = 0;
+        }
+        offset = Math.min(Math.max(offset, 0), this.pagination.maxOffset);
+
+        return { limit, offset };
+    }
+
     _resolveGroupedValues(value, groups = null) {
         if (value === undefined || value === null || value === '') {
             return [];
@@ -810,15 +845,13 @@ class CarModel {
             const safeTable = this._normalizeTable(table);
             const { conditions, params } = this._buildLocalSearchWhere(filters);
 
-            // Пагинация
-            const limit = parseInt(filters.limit) || 20;
-            const offset = parseInt(filters.offset) || 0;
+            const { limit, offset } = this._normalizePagination(filters.limit, filters.offset);
 
             const whereClause = conditions.join(' AND ');
-            const sql = `SELECT * FROM ${safeTable} WHERE ${whereClause} ORDER BY ID DESC LIMIT ${limit} OFFSET ${offset}`;
+            const sql = `SELECT * FROM ${safeTable} WHERE ${whereClause} ORDER BY ID DESC LIMIT ? OFFSET ?`;
 
             connection = await db.getConnection();
-            const [rows] = await connection.execute(sql, params);
+            const [rows] = await connection.execute(sql, [...params, limit, offset]);
 
             // Важно: данные из базы тоже прогоняем через нормализатор
             return rows.map(car => this._normalizeCarData(car));
