@@ -45,7 +45,7 @@ class Render_Detail_Page {
                                 <div data-delay="0" data-hover="true" class="dropdown w-dropdown">
                                     <div class="dropdown-toggle w-dropdown-toggle">
                                         <div>Каталог</div><img loading="lazy" src="<?php echo get_template_directory_uri() ?>/images/683eaa470902760dca70893b_down.png" alt class="image-2"></div>
-                                    <nav class="dropdown-list w-dropdown-list"><a href="/japan/" class="dropdown-link w-dropdown-link">Авто из Японии</a><a href="/korea/" class="dropdown-link w-dropdown-link">Авто из Кореи</a><a href="/china/" class="dropdown-link w-dropdown-link">Авто из Китая</a><a href="/bike/" class="dropdown-link w-dropdown-link">Мотоциклы</a><a href="https://auc.asiaexpressauto.ru/" target="_blank" class="dropdown-link w-dropdown-link">Аукционы Японии</a></nav>
+                                    <nav class="dropdown-list w-dropdown-list"><a href="/japan/" class="dropdown-link w-dropdown-link">Авто из Японии</a><a href="/korea/" class="dropdown-link w-dropdown-link">Авто из Кореи</a><a href="/che_available/" class="dropdown-link w-dropdown-link">Авто из Китая (в наличии)</a><a href="/china/" class="dropdown-link w-dropdown-link">Авто из Китая (под заказ)</a><a href="/bike/" class="dropdown-link w-dropdown-link">Мотоциклы</a><a href="https://auc.asiaexpressauto.ru/" target="_blank" class="dropdown-link w-dropdown-link">Аукционы Японии</a></nav>
                                 </div><a href="/about/" class="nav-link">О нас</a><a href="/blog/" class="nav-link">Статьи</a><a href="/review/" class="nav-link">Отзывы</a><a href="/contact/" class="nav-link">Контакты</a>
                                 <div data-delay="0" data-hover="true" class="dropdown w-dropdown">
                                     <div class="dropdown-toggle w-dropdown-toggle">
@@ -546,7 +546,7 @@ class Render_Detail_Page {
                     </div>
                     <div class="footer-col">
                         <div class="m-16-600 white">Навигация:</div>
-                        <div class="footer-links-wrapper"><a href="/" class="m-14-400 white">Главная</a><a href="/japan/" class="m-14-400 white">Авто из Японии</a><a href="/korea/" class="m-14-400 white">Авто из Кореи</a><a href="/china/" class="m-14-400 white">Авто из Китая</a><a href="/bike/" class="m-14-400 white">Мотоциклы</a><a href="https://auc.asiaexpressauto.ru/" class="m-14-400 white">Аукционы Японии</a><a href="/about/" class="m-14-400 white">О нас</a><a href="/blog/" class="m-14-400 white">Статьи</a><a href="/contact/" class="m-14-400 white">Контакты</a></div>
+                        <div class="footer-links-wrapper"><a href="/" class="m-14-400 white">Главная</a><a href="/japan/" class="m-14-400 white">Авто из Японии</a><a href="/korea/" class="m-14-400 white">Авто из Кореи</a><a href="/che_available/" class="m-14-400 white">Авто из Китая (в наличии)</a><a href="/china/" class="m-14-400 white">Авто из Китая (под заказ)</a><a href="/bike/" class="m-14-400 white">Мотоциклы</a><a href="https://auc.asiaexpressauto.ru/" class="m-14-400 white">Аукционы Японии</a><a href="/about/" class="m-14-400 white">О нас</a><a href="/blog/" class="m-14-400 white">Статьи</a><a href="/contact/" class="m-14-400 white">Контакты</a></div>
                     </div>
                     <div class="footer-col">
                         <div class="m-16-600 white">Контакты:</div>
