@@ -1,6 +1,4 @@
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 const CarModel = require('../models/CarModel');
 require('dotenv').config();
 
@@ -33,7 +31,6 @@ class CalcAvtoScheduler {
             'bike': this.bikeToken        // Мотоциклы
         };
 
-        this.failedLog = path.join(__dirname, 'calc_avto_failed.log');
         this.debug = (process.env.CALC_AVTO_DEBUG === 'true');
 
         // Наценки для разных рынков
@@ -417,9 +414,6 @@ class CalcAvtoScheduler {
             return true;
         } catch (err) {
             this.error(table, `[CALC_AVTO] ❌ Error processing car ${car.ID}:`, err.message);
-            try {
-                fs.appendFileSync(this.failedLog, JSON.stringify({ ts: new Date().toISOString(), table, id: car.ID, error: err.message }) + '\n');
-            } catch (e) {}
             return false;
         }
     }
@@ -895,8 +889,6 @@ class CalcAvtoScheduler {
         if (lastErr) {
             // failed after retries
             this.error(isBike ? 'bike' : 'car', `[CALC_AVTO] AJES request failed after ${maxAttempts} attempts for car ${car.ID}`);
-            // write preview and return null so caller skips DB update
-            try { fs.appendFileSync(this.failedLog, JSON.stringify({ ts: new Date().toISOString(), table: market, id: car.ID, url: safeUrl, error: lastErr.message }) + '\n'); } catch (e) {}
             return null;
         }
 
@@ -938,7 +930,6 @@ class CalcAvtoScheduler {
         } else {
             if (raw_sum === null) {
                 this.error('car', '[CALC_AVTO] Invalid AJES response for car, no <sum>:', responseText.slice(0, 300));
-                fs.appendFileSync(this.failedLog, JSON.stringify({ ts: new Date().toISOString(), url: safeUrl, response: responseText.slice(0, 500) }) + '\n');
                 return null;
             }
             tks_total = raw_sum;
