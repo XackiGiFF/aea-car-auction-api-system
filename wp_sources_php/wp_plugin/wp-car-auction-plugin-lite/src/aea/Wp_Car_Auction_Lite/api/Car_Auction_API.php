@@ -226,15 +226,15 @@ class Car_Auction_API {
     public function get_dynamic_filters($table = 'main', $filters = array()) {
         // Получаем реальный IP клиента
         $client_ip = $this->get_client_ip();
+        $dynamic_filters = $this->filter_dynamic_filters($filters);
 
         $provider = ($table === 'che_available') ? 'che-168' : 'ajes';
 
         $url = $this->build_api_url('/api/filters/dynamic', array_merge([
             'table' => $table,
-            'only_calculated' => 'true',
             'client_ip' => $client_ip, // Добавляем обязательный параметр
             'provider' => $provider,
-        ], $filters));
+        ], $dynamic_filters));
 
         $response = $this->fast_api_request($url);
 
@@ -519,6 +519,47 @@ class Car_Auction_API {
         return sanitize_text_field($input);
     }
 
+    /**
+     * Оставляет только параметры, разрешенные strict API для /api/filters/dynamic.
+     * limit/offset и прочие служебные/устаревшие поля намеренно отбрасываются.
+     */
+    private function filter_dynamic_filters(array $filters): array
+    {
+        $allowed_keys = [
+            'vendor', 'model',
+            'year', 'year_from', 'year_to',
+            'engine', 'engine_from', 'engine_to',
+            'mileage', 'mileage_from', 'mileage_to',
+            'price', 'price_from', 'price_to',
+            'transmission', 'transmission_group',
+            'drive', 'drive_group',
+            'fuel', 'fuel_type', 'fuel_group',
+            'page'
+        ];
+
+        $normalized = [];
+
+        foreach ($allowed_keys as $key) {
+            if (!array_key_exists($key, $filters)) {
+                continue;
+            }
+
+            $value = $filters[$key];
+            if (is_array($value) || null === $value) {
+                continue;
+            }
+
+            $value = trim((string)$value);
+            if ('' === $value) {
+                continue;
+            }
+
+            $normalized[$key] = sanitize_text_field($value);
+        }
+
+        return $normalized;
+    }
+
     private function resolve_provider($table = 'main'): string
     {
         return $table === 'che_available' ? 'che-168' : 'ajes';
@@ -552,6 +593,7 @@ class Car_Auction_API {
 
             // Получаем IP клиента
             $client_ip = $this->get_client_ip();
+            $dynamic_filters = $this->filter_dynamic_filters($currentFilters);
 
             $provider = ($table === 'che_available') ? 'che-168' : 'ajes';
 
@@ -560,7 +602,7 @@ class Car_Auction_API {
                 'table' => $table,
                 'client_ip' => $client_ip,
                 'provider' => $provider
-            ], $currentFilters); // Передаем фильтры напрямую в query string
+            ], $dynamic_filters); // Передаем только strict API совместимые фильтры
 
             // Строим URL для запроса динамических фильтров
             $url = $this->build_api_url('/api/filters/dynamic', $api_params);
@@ -591,7 +633,7 @@ class Car_Auction_API {
                     'fuel_types' => $data['fuel_types'] ?? [],
                     'transmissions' => $data['transmissions'] ?? [],
                     'drives' => $data['drives'] ?? [],
-                    'current_filters' => $data['current_filters'] ?? $currentFilters,
+                    'current_filters' => $data['current_filters'] ?? $dynamic_filters,
                     'table_support' => $data['table_support'] ?? [
                         'has_fuel_filter' => ($table !== 'bike'),
                         'has_transmission_filter' => ($table !== 'bike'),
