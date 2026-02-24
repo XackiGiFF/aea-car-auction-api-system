@@ -1,6 +1,4 @@
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 const CarModel = require('../models/CarModel');
 require('dotenv').config();
 
@@ -33,7 +31,6 @@ class CalcAvtoScheduler {
             'bike': this.bikeToken        // Мотоциклы
         };
 
-        this.failedLog = path.join(__dirname, 'calc_avto_failed.log');
         this.debug = (process.env.CALC_AVTO_DEBUG === 'true');
 
         // Наценки для разных рынков
@@ -198,6 +195,18 @@ class CalcAvtoScheduler {
     log(table, ...args) { const prefix = `[${this.formatTs()}] ${table ? table + ' -' : ''}`; console.log(prefix, ...args); }
     error(table, ...args) { const prefix = `[${this.formatTs()}] ${table ? table + ' -' : ''}`; console.error(prefix, ...args); }
     debugLog(table, ...args) { if (!this.debug) return; const prefix = `[${this.formatTs()}] ${table ? table + ' -' : ''}`; console.log(prefix, ...args); }
+    maskSensitiveUrl(rawUrl) {
+        const url = String(rawUrl || '');
+        return url
+            .replace(/(\/api\/)[^-/?]+(-auc\.asiaexpressauto\.ru_Dftr)/i, '$1***$2')
+            .replace(/([?&]code=)[^&]*/i, '$1***');
+    }
+
+    escapeSqlLiteral(value) {
+        return String(value || '')
+            .replace(/\\/g, '\\\\')
+            .replace(/'/g, "''");
+    }
 
     // Sleep helper
     sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -249,11 +258,11 @@ class CalcAvtoScheduler {
             await Promise.all(promises);
             this.log(null, '[CALC_AVTO] All tables processed');
 
-	    this.isRunning = false;
-            this.lastRunTime = new Date();
-
         } catch (err) {
             this.error(null, '[CALC_AVTO] Fatal error:', err.message);
+        } finally {
+            this.isRunning = false;
+            this.lastRunTime = new Date();
         }
     }
 
@@ -405,9 +414,6 @@ class CalcAvtoScheduler {
             return true;
         } catch (err) {
             this.error(table, `[CALC_AVTO] ❌ Error processing car ${car.ID}:`, err.message);
-            try {
-                fs.appendFileSync(this.failedLog, JSON.stringify({ ts: new Date().toISOString(), table, id: car.ID, error: err.message }) + '\n');
-            } catch (e) {}
             return false;
         }
     }
@@ -727,7 +733,9 @@ class CalcAvtoScheduler {
 
             if (mark && model) {
                 // ВТОРОЙ ЗАПРОС - поиск аналогичных машин
-                const similarSql = `SELECT PW FROM ${table} WHERE MARKA_NAME = '${mark}' AND MODEL_NAME = '${model}' AND PW != '' AND PW IS NOT NULL LIMIT 5`;
+                const safeMark = this.escapeSqlLiteral(mark);
+                const safeModel = this.escapeSqlLiteral(model);
+                const similarSql = `SELECT PW FROM ${table} WHERE MARKA_NAME = '${safeMark}' AND MODEL_NAME = '${safeModel}' AND PW != '' AND PW IS NOT NULL LIMIT 5`;
                 const similarParams = new URLSearchParams({
                     ip: process.env.API_IP,
                     code: process.env.API_CODE,
@@ -754,9 +762,8 @@ class CalcAvtoScheduler {
             }
 
             // ЕСЛИ АНАЛОГИ НЕ НАЙДЕНЫ - используем дефолт для электромобилей
-            this.debugLog(market, `[POWER_API] ⚡ Using default power for electric car`);
-            //return 150; // Дефолтная мощность для электромобилей
-            return null;
+            this.debugLog(market, `[POWER_API] ⚡ Similar cars not found, fallback power=150`);
+            return 150;
 
         } catch (error) {
             this.debugLog(market, `[POWER_API] ❌ Failed for ${carId}: ${error.message}`);
@@ -812,7 +819,8 @@ class CalcAvtoScheduler {
             }
         }
 
-        if(power === 0) {
+        if (!Number.isFinite(power) || power <= 0) {
+            this.debugLog(market, `[CALC_AVTO] Invalid power for ${car.ID}: ${power}, skipping`);
             return null; // Пропускаем расчет полностью
         }
         
@@ -853,7 +861,8 @@ class CalcAvtoScheduler {
         const url = `${base}?${qs}`;
 
         // Log short (debug only)
-        this.debugLog(isBike ? 'bike' : 'car', `[CALC_AVTO] ➤ AJES request: ${url.slice(0, 200)}`);
+        const safeUrl = this.maskSensitiveUrl(url);
+        this.debugLog(isBike ? 'bike' : 'car', `[CALC_AVTO] ➤ AJES request: ${safeUrl.slice(0, 200)}`);
 
         let responseText;
         // Retry logic: 5 attempts, 2s delay
@@ -869,7 +878,7 @@ class CalcAvtoScheduler {
                 break;
             } catch (err) {
                 lastErr = err;
-                this.error(isBike ? 'bike' : 'car', `[CALC_AVTO] AJES request failed (${attempt}/${maxAttempts}):`, err.message, 'url:', url);
+                this.error(isBike ? 'bike' : 'car', `[CALC_AVTO] AJES request failed (${attempt}/${maxAttempts}):`, err.message, 'url:', safeUrl);
                 if (attempt < maxAttempts) {
                     this.debugLog(isBike ? 'bike' : 'car', `[CALC_AVTO] Retrying in ${retryDelay}ms...`);
                     await this.sleep(retryDelay);
@@ -880,8 +889,6 @@ class CalcAvtoScheduler {
         if (lastErr) {
             // failed after retries
             this.error(isBike ? 'bike' : 'car', `[CALC_AVTO] AJES request failed after ${maxAttempts} attempts for car ${car.ID}`);
-            // write preview and return null so caller skips DB update
-            try { fs.appendFileSync(this.failedLog, JSON.stringify({ ts: new Date().toISOString(), table: market, id: car.ID, url, error: lastErr.message }) + '\n'); } catch (e) {}
             return null;
         }
 
@@ -923,7 +930,6 @@ class CalcAvtoScheduler {
         } else {
             if (raw_sum === null) {
                 this.error('car', '[CALC_AVTO] Invalid AJES response for car, no <sum>:', responseText.slice(0, 300));
-                fs.appendFileSync(this.failedLog, JSON.stringify({ ts: new Date().toISOString(), url, response: responseText.slice(0, 500) }) + '\n');
                 return null;
             }
             tks_total = raw_sum;
@@ -1003,13 +1009,38 @@ class CalcAvtoScheduler {
             }
         }
 
+        if (!Number.isFinite(priceInRub)) {
+            const fallbackRate = rates[currency];
+            if (Number.isFinite(fallbackRate) && Number.isFinite(originalPrice)) {
+                priceInRub = parseFloat((originalPrice * fallbackRate).toFixed(2));
+                this.debugLog(market, `[CALC_AVTO] Fallback CBR rate used for ${car.ID}: ${currency}=${fallbackRate}`);
+            }
+        }
+
+        if (!Number.isFinite(priceInRub) || !Number.isFinite(tks_total_rub)) {
+            this.error(market, `[CALC_AVTO] Invalid numeric components for ${car.ID}`, {
+                priceInRub,
+                tks_total_rub,
+                originalPrice,
+                currency
+            });
+            return null;
+        }
+
         // После получения tks_total_rub
         let finalPrice;
 
         let markup = this.calculateMarkup(market, car, rates, currencyBlock);
+        if (!Number.isFinite(markup)) {
+            markup = 0;
+        }
 
         // Финальный расчет
-        finalPrice = priceInRub + tks_total_rub + markup; // Стоимость + Пошлина + Утиль + Наценка
+        finalPrice = parseFloat((priceInRub + tks_total_rub + markup).toFixed(2)); // Стоимость + Пошлина + Утиль + Наценка
+        if (!Number.isFinite(finalPrice)) {
+            this.error(market, `[CALC_AVTO] Final price is invalid for ${car.ID}`);
+            return null;
+        }
 
         return {
             price_calc: finalPrice,
@@ -1087,8 +1118,8 @@ class CalcAvtoScheduler {
             return maxStartFinish;
         }
 
-        // Fallback: если все поля нулевые
-        return 100000;
+        // Если валидной цены нет - не рассчитываем
+        return null;
     }
 }
 

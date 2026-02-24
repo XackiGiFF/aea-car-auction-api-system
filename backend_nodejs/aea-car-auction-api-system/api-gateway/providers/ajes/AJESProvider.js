@@ -160,6 +160,16 @@ class AJESProvider extends BaseProvider {
         this.externalHost = 'http://87.242.72.57';
         this.externalCache = {};
         this.externalCacheTTL = 30 * 60 * 1000;
+        this.debugSql = process.env.AJES_DEBUG_SQL === 'true';
+        this.defaultLimit = 20;
+        this.maxLimit = (() => {
+            const parsed = Number.parseInt(process.env.API_PAGINATION_LIMIT_MAX || '200', 10);
+            return Number.isInteger(parsed) && parsed > 0 ? parsed : 200;
+        })();
+        this.maxOffset = (() => {
+            const parsed = Number.parseInt(process.env.API_PAGINATION_OFFSET_MAX || '1000000', 10);
+            return Number.isInteger(parsed) && parsed >= 0 ? parsed : 1000000;
+        })();
     }
 
     // ==================== ОСНОВНЫЕ МЕТОДЫ ====================
@@ -174,7 +184,7 @@ class AJESProvider extends BaseProvider {
             });
 
             const url = `${this.apiBase}?${params}`;
-            console.log(`[AJES] URL: ${url}`);
+            console.log(`[AJES] URL: ${this._maskSensitiveUrl(url)}`);
 
             const response = await axios.get(url, {
                 timeout: 15000,
@@ -215,13 +225,66 @@ class AJESProvider extends BaseProvider {
         }
     }
 
+    _maskSensitiveUrl(rawUrl) {
+        try {
+            const parsed = new URL(rawUrl);
+            if (parsed.searchParams.has('code')) {
+                parsed.searchParams.set('code', '***');
+            }
+            if (parsed.searchParams.has('sql')) {
+                parsed.searchParams.set('sql', '***');
+            }
+            return parsed.toString();
+        } catch (_) {
+            return String(rawUrl || '')
+                .replace(/([?&]code=)[^&]*/i, '$1***')
+                .replace(/([?&]sql=)[^&]*/i, '$1***');
+        }
+    }
+
+    _escapeSqlLiteral(value) {
+        return String(value ?? '')
+            .replace(/\\/g, '\\\\')
+            .replace(/\u0000/g, '')
+            .replace(/'/g, "''");
+    }
+
+    _logSql(label, sql) {
+        if (!this.debugSql) return;
+        const compact = String(sql || '').replace(/\s+/g, ' ').trim();
+        const preview = compact.length > 220 ? `${compact.slice(0, 220)}...` : compact;
+        console.log(`[AJES] ${label}: ${preview}`);
+    }
+
+    _getSafeTable(table = 'main') {
+        const normalized = String(table || 'main').trim().toLowerCase();
+        return this.tableColumns[normalized] ? normalized : 'main';
+    }
+
+    _normalizePagination(limitRaw, offsetRaw) {
+        let limit = Number.parseInt(limitRaw, 10);
+        if (!Number.isInteger(limit)) {
+            limit = this.defaultLimit;
+        }
+        limit = Math.min(Math.max(limit, 1), this.maxLimit);
+
+        let offset = Number.parseInt(offsetRaw, 10);
+        if (!Number.isInteger(offset)) {
+            offset = 0;
+        }
+        offset = Math.min(Math.max(offset, 0), this.maxOffset);
+
+        return { limit, offset };
+    }
+
     // ==================== ФИЛЬТРЫ И ГРУППИРОВКИ ====================
 
     groupFilterToSQL(field, group, table = 'main') {
+        const safeTable = this._getSafeTable(table);
         const columnMap = {
-            'transmission': this.tableColumns[table]?.transmission || 'KPP',
-            'drive': this.tableColumns[table]?.drive || 'PRIV',
-            'fuel': this.tableColumns[table]?.fuel_type || 'TIME'
+            'transmission': this.tableColumns[safeTable]?.transmission || 'KPP',
+            'drive': this.tableColumns[safeTable]?.drive || 'PRIV',
+            'fuel': this.tableColumns[safeTable]?.fuel_type || 'TIME'
         };
 
         const column = columnMap[field];
@@ -248,45 +311,64 @@ class AJESProvider extends BaseProvider {
      * ИСПРАВЛЕНО: Убрано дублирование условий.
      */
     filterToSQL(filters, table = 'main') {
+        const safeTable = this._getSafeTable(table);
         let sql = '';
-        const cols = this.tableColumns[table] || this.tableColumns.main;
+        const cols = this.tableColumns[safeTable] || this.tableColumns.main;
 
         // --- 1. Основные параметры (Марка, Модель, Год, Объем) ---
 
         // Vendor (Марка)
         if (filters.vendor) {
             const col = cols.vendor_name || 'MARKA_NAME';
-            sql += ` AND ${col} = '${filters.vendor.replace(/'/g, "''")}'`;
+            sql += ` AND ${col} = '${this._escapeSqlLiteral(filters.vendor)}'`;
         }
 
         // Model (Модель)
         if (filters.model) {
             const col = cols.model_name || 'MODEL_NAME';
-            sql += ` AND ${col} = '${filters.model.replace(/'/g, "''")}'`;
+            sql += ` AND ${col} = '${this._escapeSqlLiteral(filters.model)}'`;
         }
 
         // Years
         if (filters.year_from) {
-            sql += ` AND YEAR >= ${parseInt(filters.year_from)}`;
+            const yearFrom = parseInt(filters.year_from, 10);
+            if (Number.isFinite(yearFrom)) {
+                sql += ` AND YEAR >= ${yearFrom}`;
+            }
         }
         if (filters.year_to) {
-            sql += ` AND YEAR <= ${parseInt(filters.year_to)}`;
+            const yearTo = parseInt(filters.year_to, 10);
+            if (Number.isFinite(yearTo)) {
+                sql += ` AND YEAR <= ${yearTo}`;
+            }
         }
 
         // Engine Volume
         if (filters.engine_from) {
-            sql += ` AND ENG_V >= ${parseFloat(filters.engine_from)}`;
+            const engineFrom = parseFloat(filters.engine_from);
+            if (Number.isFinite(engineFrom)) {
+                sql += ` AND ENG_V >= ${engineFrom}`;
+            }
         }
         if (filters.engine_to) {
-            sql += ` AND ENG_V <= ${parseFloat(filters.engine_to)}`;
+            const engineTo = parseFloat(filters.engine_to);
+            if (Number.isFinite(engineTo)) {
+                sql += ` AND ENG_V <= ${engineTo}`;
+            }
         }
 
         // Engine Volume
         if (filters.mileage_from) {
-            sql += ` AND MILEAGE >= ${parseFloat(filters.mileage_from)}`;
+            const mileageFrom = parseFloat(filters.mileage_from);
+            if (Number.isFinite(mileageFrom)) {
+                sql += ` AND MILEAGE >= ${mileageFrom}`;
+            }
         }
         if (filters.mileage_to) {
-            sql += ` AND MILEAGE <= ${parseFloat(filters.mileage_to)}`;
+            const mileageTo = parseFloat(filters.mileage_to);
+            if (Number.isFinite(mileageTo)) {
+                sql += ` AND MILEAGE <= ${mileageTo}`;
+            }
         }
 
         // --- 2. Сложные поля с маппингом (КПП, Топливо, Привод) ---
@@ -304,7 +386,7 @@ class AJESProvider extends BaseProvider {
                 if (mapped) {
                     sql += ` AND ${cols.transmission} IN ('${mapped.join("','")}')`;
                 } else {
-                    sql += ` AND ${cols.transmission} = '${transVal.replace(/'/g, "''")}'`;
+                    sql += ` AND ${cols.transmission} = '${this._escapeSqlLiteral(transVal)}'`;
                 }
             }
         }
@@ -317,7 +399,7 @@ class AJESProvider extends BaseProvider {
                 if (mapped) {
                     sql += ` AND ${cols.fuel_type} IN ('${mapped.join("','")}')`;
                 } else {
-                    sql += ` AND ${cols.fuel_type} = '${fuelVal.replace(/'/g, "''")}'`;
+                    sql += ` AND ${cols.fuel_type} = '${this._escapeSqlLiteral(fuelVal)}'`;
                 }
             }
         }
@@ -330,7 +412,7 @@ class AJESProvider extends BaseProvider {
                 if (mapped) {
                     sql += ` AND ${cols.drive} IN ('${mapped.join("','")}')`;
                 } else {
-                    sql += ` AND ${cols.drive} = '${driveVal.replace(/'/g, "''")}'`;
+                    sql += ` AND ${cols.drive} = '${this._escapeSqlLiteral(driveVal)}'`;
                 }
             }
         }
@@ -339,24 +421,24 @@ class AJESProvider extends BaseProvider {
     }
 
     buildSQL(filters, table) {
+        const safeTable = this._getSafeTable(table);
         let sql = `SELECT `;
 
         // Важно: перечисляем поля без AS, так как API может не поддерживать алиасы
-        if (table === 'bike') {
+        if (safeTable === 'bike') {
             sql += `id, MARKA_NAME, MODEL_NAME, YEAR, ENG_V, MILEAGE, START, FINISH, IMAGES, RATE, AUCTION, AUCTION_DATE, LOT_NUM, STATUS`;
         } else {
             sql += `id, MARKA_NAME, MODEL_NAME, YEAR, ENG_V, PW, TIME, MILEAGE, KPP, PRIV, START, FINISH, AVG_PRICE, IMAGES, RATE, AUCTION, AUCTION_DATE, LOT, STATUS`;
         }
 
-        sql += ` FROM ${table} WHERE 1=1`;
+        sql += ` FROM ${safeTable} WHERE 1=1`;
 
         // Добавляем WHERE условия
-        sql += this.filterToSQL(filters, table);
+        sql += this.filterToSQL(filters, safeTable);
 
         sql += ' ORDER BY id DESC';
 
-        const limit = filters.limit || 20;
-        const offset = filters.offset || 0;
+        const { limit, offset } = this._normalizePagination(filters.limit, filters.offset);
         sql += ` LIMIT ${offset}, ${limit}`;
 
         return sql;
@@ -365,8 +447,9 @@ class AJESProvider extends BaseProvider {
     // ==================== РЕАЛИЗАЦИЯ МЕТОДОВ ====================
 
     async getCars(filters = {}, table = 'main', clientIP) {
-        const sql = this.buildSQL(filters, table);
-        console.log(`[AJES] SQL: ${sql}`);
+        const safeTable = this._getSafeTable(table);
+        const sql = this.buildSQL(filters, safeTable);
+        this._logSql('SQL', sql);
 
         const data = await this.makeRequest(sql, clientIP);
         if (!data || !Array.isArray(data)) return [];
@@ -378,20 +461,21 @@ class AJESProvider extends BaseProvider {
     }
 
     async getCarById(carId, table = 'main', clientIP) {
-        const escapedId = String(carId).replace(/'/g, "''");
-        const selectColumns = table === 'bike'
+        const safeTable = this._getSafeTable(table);
+        const escapedId = this._escapeSqlLiteral(carId);
+        const selectColumns = safeTable === 'bike'
             ? 'id, MARKA_NAME, MODEL_NAME, YEAR, ENG_V, MILEAGE, START, FINISH, IMAGES, RATE, AUCTION, AUCTION_DATE, LOT_NUM, STATUS'
             : 'id, MARKA_NAME, MODEL_NAME, YEAR, ENG_V, PW, TIME, MILEAGE, KPP, PRIV, START, FINISH, AVG_PRICE, IMAGES, RATE, AUCTION, AUCTION_DATE, LOT, STATUS';
 
         // Сначала запрашиваем точное совпадение ID с учетом регистра.
-        const strictSql = `SELECT ${selectColumns} FROM ${table} WHERE BINARY id = '${escapedId}' ORDER BY id DESC LIMIT 1`;
-        console.log(`[AJES] SQL for getCarById (strict): ${strictSql}`);
+        const strictSql = `SELECT ${selectColumns} FROM ${safeTable} WHERE BINARY id = '${escapedId}' ORDER BY id DESC LIMIT 1`;
+        this._logSql('SQL for getCarById (strict)', strictSql);
 
         let data = await this.makeRequest(strictSql, clientIP);
         if (!data || data.length === 0) {
             // Фолбэк на обычное сравнение, если BINARY не поддержан или запись не найдена.
-            const fallbackSql = `SELECT ${selectColumns} FROM ${table} WHERE id = '${escapedId}' ORDER BY id DESC LIMIT 1`;
-            console.log(`[AJES] SQL for getCarById (fallback): ${fallbackSql}`);
+            const fallbackSql = `SELECT ${selectColumns} FROM ${safeTable} WHERE id = '${escapedId}' ORDER BY id DESC LIMIT 1`;
+            this._logSql('SQL for getCarById (fallback)', fallbackSql);
             data = await this.makeRequest(fallbackSql, clientIP);
         }
 
@@ -412,18 +496,19 @@ class AJESProvider extends BaseProvider {
 
     async getDynamicFilters(currentFilters = {}, table = 'main', clientIP) {
         try {
+            const safeTable = this._getSafeTable(table);
             // Получаем вендоры
-            const vendors = await this._fetchExternalManuf(table, clientIP);
+            const vendors = await this._fetchExternalManuf(safeTable, clientIP);
             const vendorNames = vendors ? vendors.map(v => v.name).filter(Boolean) : [];
 
             // Получаем модели
             let models = [];
             if (currentFilters.vendor) {
-                models = await this.getModelsByVendor(currentFilters.vendor, table, clientIP);
+                models = await this.getModelsByVendor(currentFilters.vendor, safeTable, clientIP);
             }
 
             // Получаем фильтры с группировкой
-            const fuelRaw = await this.getAvailableFuelTypes(table, clientIP);
+            const fuelRaw = await this.getAvailableFuelTypes(safeTable, clientIP);
 
             const fuel_types = Object.entries(fuelRaw).map(([code, data]) => ({
                 code: code,
@@ -431,8 +516,8 @@ class AJESProvider extends BaseProvider {
                 count: data.count
             }));
 
-            const transmissions = await this.getAvailableTransmissions(table, clientIP);
-            const drives = await this.getAvailableDrives(table, clientIP);
+            const transmissions = await this.getAvailableTransmissions(safeTable, clientIP);
+            const drives = await this.getAvailableDrives(safeTable, clientIP);
 
             // Генерация диапазона годов
             const years = this._generateYearRange();
@@ -459,10 +544,11 @@ class AJESProvider extends BaseProvider {
     }
 
     async getTotalCount(filters = {}, table = 'main', clientIP) {
-        let sql = `SELECT COUNT(id) FROM ${table} WHERE 1=1`;
-        sql += this.filterToSQL(filters, table);
+        const safeTable = this._getSafeTable(table);
+        let sql = `SELECT COUNT(id) FROM ${safeTable} WHERE 1=1`;
+        sql += this.filterToSQL(filters, safeTable);
 
-        console.log(`[AJES] Count SQL: ${sql}`);
+        this._logSql('Count SQL', sql);
         const data = await this.makeRequest(sql, clientIP);
 
         if (data && data.length > 0 && data[0].TAG0) {
@@ -473,7 +559,8 @@ class AJESProvider extends BaseProvider {
 
     async getVendors(table = 'main', clientIP) {
         try {
-            const sql = `SELECT MARKA_ID, MARKA_NAME FROM ${table} GROUP BY MARKA_NAME ORDER BY MARKA_NAME ASC`;
+            const safeTable = this._getSafeTable(table);
+            const sql = `SELECT MARKA_ID, MARKA_NAME FROM ${safeTable} GROUP BY MARKA_NAME ORDER BY MARKA_NAME ASC`;
 
             const data = await this.makeRequest(sql, clientIP);
             if (Array.isArray(data) && data.length > 0) {
@@ -491,8 +578,10 @@ class AJESProvider extends BaseProvider {
 
     async getModelsByVendor(vendorName, table, clientIP) {
         try {
-            const sql = `SELECT DISTINCT MODEL_NAME FROM ${table}
-                         WHERE MARKA_NAME = '${vendorName}'
+            const safeTable = this._getSafeTable(table);
+            const escapedVendorName = this._escapeSqlLiteral(vendorName);
+            const sql = `SELECT DISTINCT MODEL_NAME FROM ${safeTable}
+                         WHERE MARKA_NAME = '${escapedVendorName}'
                            AND MODEL_NAME IS NOT NULL
                          ORDER BY MODEL_NAME`;
 
@@ -515,11 +604,12 @@ class AJESProvider extends BaseProvider {
     }
 
     async getAvailableFuelTypes(table = 'main', clientIP) {
-        const fuelColumn = this.tableColumns[table]?.fuel_type;
+        const safeTable = this._getSafeTable(table);
+        const fuelColumn = this.tableColumns[safeTable]?.fuel_type;
         if (!fuelColumn) return this.mapper.getEmptyFuelGroups();
 
         // SQL: SELECT TIME, COUNT(*) FROM ... GROUP BY TIME
-        const sql = `SELECT ${fuelColumn}, COUNT(*) FROM ${table} 
+        const sql = `SELECT ${fuelColumn}, COUNT(*) FROM ${safeTable} 
                      WHERE ${fuelColumn} IS NOT NULL AND ${fuelColumn} != '' 
                      GROUP BY ${fuelColumn}`;
 
@@ -529,10 +619,11 @@ class AJESProvider extends BaseProvider {
 
     async getAvailableTransmissions(table = 'main', clientIP) {
         try {
-            const transmissionColumn = this.tableColumns[table]?.transmission;
+            const safeTable = this._getSafeTable(table);
+            const transmissionColumn = this.tableColumns[safeTable]?.transmission;
             if (!transmissionColumn) return this.mapper.getEmptyTransmissionGroups();
 
-            const sql = `SELECT ${transmissionColumn}, COUNT(*) FROM ${table}
+            const sql = `SELECT ${transmissionColumn}, COUNT(*) FROM ${safeTable}
                          WHERE ${transmissionColumn} IS NOT NULL
                          GROUP BY ${transmissionColumn}`;
 
@@ -550,10 +641,11 @@ class AJESProvider extends BaseProvider {
 
     async getAvailableDrives(table = 'main', clientIP) {
         try {
-            const driveColumn = this.tableColumns[table]?.drive;
+            const safeTable = this._getSafeTable(table);
+            const driveColumn = this.tableColumns[safeTable]?.drive;
             if (!driveColumn) return this.mapper.getEmptyDriveGroups();
 
-            const sql = `SELECT ${driveColumn}, COUNT(*) FROM ${table}
+            const sql = `SELECT ${driveColumn}, COUNT(*) FROM ${safeTable}
                          WHERE ${driveColumn} IS NOT NULL
                          GROUP BY ${driveColumn}`;
 

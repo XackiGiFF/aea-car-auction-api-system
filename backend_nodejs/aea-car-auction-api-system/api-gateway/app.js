@@ -8,10 +8,81 @@ const CarModel = require('./models/CarModel');
 const apiRoutes = require('./api/service');
 const { specs, swaggerUi } = require('./swagger');
 
+const parsePositiveInt = (value, fallback) => {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const createRateLimiter = ({ windowMs, maxRequests }) => {
+    if (!Number.isInteger(maxRequests) || maxRequests <= 0) {
+        return (_req, _res, next) => next();
+    }
+
+    const hits = new Map();
+    let lastCleanupAt = 0;
+
+    return (req, res, next) => {
+        // Health endpoint must stay available for Docker healthcheck.
+        if (req.path === '/health') {
+            return next();
+        }
+
+        const now = Date.now();
+        if (now - lastCleanupAt > windowMs) {
+            for (const [ip, state] of hits.entries()) {
+                if (!state || state.resetAt <= now) {
+                    hits.delete(ip);
+                }
+            }
+            lastCleanupAt = now;
+        }
+
+        const forwardedForRaw = req.headers['x-forwarded-for'];
+        const forwardedFor = Array.isArray(forwardedForRaw)
+            ? forwardedForRaw[0]
+            : String(forwardedForRaw || '').split(',')[0].trim();
+        const clientIp = forwardedFor || req.ip || req.socket?.remoteAddress || 'unknown';
+
+        const current = hits.get(clientIp);
+        if (!current || current.resetAt <= now) {
+            const nextState = { count: 1, resetAt: now + windowMs };
+            hits.set(clientIp, nextState);
+            res.setHeader('X-RateLimit-Limit', String(maxRequests));
+            res.setHeader('X-RateLimit-Remaining', String(maxRequests - nextState.count));
+            res.setHeader('X-RateLimit-Reset', String(Math.ceil(nextState.resetAt / 1000)));
+            return next();
+        }
+
+        current.count += 1;
+        hits.set(clientIp, current);
+
+        const remaining = Math.max(maxRequests - current.count, 0);
+        res.setHeader('X-RateLimit-Limit', String(maxRequests));
+        res.setHeader('X-RateLimit-Remaining', String(remaining));
+        res.setHeader('X-RateLimit-Reset', String(Math.ceil(current.resetAt / 1000)));
+
+        if (current.count > maxRequests) {
+            return res.status(429).json({
+                error: 'Too many requests',
+                code: 'RATE_LIMIT_EXCEEDED',
+                retry_after_ms: Math.max(current.resetAt - now, 0)
+            });
+        }
+
+        return next();
+    };
+};
+
 class CarAuctionApp {
     constructor() {
         this.app = express();
         this.port = process.env.PORT || 3000;
+        const rateWindowMs = parsePositiveInt(process.env.API_RATE_LIMIT_WINDOW_MS, 60000);
+        const rateMaxRequests = parsePositiveInt(process.env.API_RATE_LIMIT_MAX_REQUESTS, 240);
+        this.apiRateLimiter = createRateLimiter({
+            windowMs: rateWindowMs,
+            maxRequests: rateMaxRequests
+        });
     }
 
     async initialize() {
@@ -27,7 +98,7 @@ class CarAuctionApp {
             this.app.use(express.urlencoded({ extended: true }));
 
             // API routes
-            this.app.use('/api', apiRoutes);
+            this.app.use('/api', this.apiRateLimiter, apiRoutes);
 
             // Health check endpoint
             this.app.get('/api/health', (req, res) => {
