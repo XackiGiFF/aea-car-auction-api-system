@@ -242,14 +242,14 @@ class Render_Search_Form_Filters {
                                     <div class="facetwp-facet facetwp-facet-price facetwp-type-number_range" data-name="price" data-type="number_range">
                                         <div class="facet-dropdown-container">
                                             <div class="facet-input-wrapper">
-                                                <input type="number" class="facetwp-number facetwp-number-min text-field" name="price_from" value="<?php echo esc_attr($filters['price_from'] ?? ''); ?>" placeholder="Мин" disabled>
+                                                <input type="number" class="facetwp-number facetwp-number-min text-field" name="price_from" value="<?php echo esc_attr($filters['price_from'] ?? ''); ?>" placeholder="Мин">
                                                 <div class="loading-spinner"></div>
                                             </div>
                                             <div class="facet-dropdown-list"></div>
                                         </div>
                                         <div class="facet-dropdown-container">
                                             <div class="facet-input-wrapper">
-                                                <input type="number" class="facetwp-number facetwp-number-max text-field" name="price_to" value="<?php echo esc_attr($filters['price_to'] ?? ''); ?>" placeholder="Макс" disabled>
+                                                <input type="number" class="facetwp-number facetwp-number-max text-field" name="price_to" value="<?php echo esc_attr($filters['price_to'] ?? ''); ?>" placeholder="Макс">
                                                 <div class="loading-spinner"></div>
                                             </div>
                                             <div class="facet-dropdown-list"></div>
