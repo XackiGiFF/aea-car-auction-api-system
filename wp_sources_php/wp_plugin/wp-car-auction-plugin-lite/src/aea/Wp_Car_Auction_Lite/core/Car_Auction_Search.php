@@ -1032,10 +1032,16 @@ class Car_Auction_Search {
             // Sanitize filters
             $sanitized_filters = array();
             $allowed_filters = array(
-                'vendor', 'model', 'year_from', 'year_to', 'engine_from', 'engine_to',
-                'mileage_from', 'mileage_to', 'kuzov', 'lot_number',
-                'fuel_type', 'transmission', 'transmission_group', 'drive', 'price_from', 'price_to',
-                //'only_calculated'
+                // strict API /api/filters/dynamic filter set
+                'vendor', 'model',
+                'year', 'year_from', 'year_to',
+                'engine', 'engine_from', 'engine_to',
+                'mileage', 'mileage_from', 'mileage_to',
+                'price', 'price_from', 'price_to',
+                'fuel', 'fuel_type', 'fuel_group',
+                'transmission', 'transmission_group',
+                'drive', 'drive_group',
+                'page'
             );
 
             foreach ($allowed_filters as $filter) {

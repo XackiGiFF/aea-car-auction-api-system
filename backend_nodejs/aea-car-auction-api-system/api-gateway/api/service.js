@@ -1041,8 +1041,6 @@ router.get('/filters/dynamic', validateBarrierCode, async (req, res) => {
             client_ip,
             ip,
             code: _code,
-            limit = PAGINATION_LIMIT_DEFAULT,
-            offset = 0,
             ...filters
         } = req.query;
         let clientIP = null;
@@ -1063,11 +1061,6 @@ router.get('/filters/dynamic', validateBarrierCode, async (req, res) => {
 
         if (safeProvider === 'ajes' && !clientIP) {
             return res.status(400).json({ error: 'Client IP required' });
-        }
-
-        const pagination = resolvePagination(limit, offset);
-        if (pagination.error) {
-            return res.status(400).json({ error: pagination.error });
         }
 
         const normalizedFilters = normalizeLegacyFilterAliases(filters);

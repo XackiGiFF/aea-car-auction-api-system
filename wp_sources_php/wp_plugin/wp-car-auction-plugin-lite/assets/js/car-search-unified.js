@@ -1955,22 +1955,28 @@ class CarSearchUnified extends CarAuctionCore {
     updateDynamicFiltersUI(data) {
         console.log('CarSearchUnified: Updating UI with dynamic filters data:', data);
 
+        var tableSupport = data.table_support || {
+            has_fuel_filter: this.currentMarket !== 'bike',
+            has_transmission_filter: this.currentMarket !== 'bike',
+            has_drive_filter: this.currentMarket !== 'bike'
+        };
+
         // Обновляем типы топливо
-        if (data.fuel_types && data.table_support && data.table_support.has_fuel_filter) {
+        if (data.fuel_types && tableSupport.has_fuel_filter) {
             this.updateFuelTypeFilter(data.fuel_types);
         } else {
             this.hideFuelTypeFilter();
         }
 
         // Обновляем типы трансмиссии
-        if (data.transmissions && data.table_support && data.table_support.has_transmission_filter) {
+        if (data.transmissions && tableSupport.has_transmission_filter) {
             this.updateTransmissionFilter(data.transmissions);
         } else {
             this.hideTransmissionFilter();
         }
 
         // Обновляем типы привода
-        if (data.drives && data.table_support && data.table_support.has_drive_filter) {
+        if (data.drives && tableSupport.has_drive_filter) {
             this.updateDriveFilter(data.drives);
         } else {
             this.hideDriveFilter();
@@ -1998,28 +2004,66 @@ class CarSearchUnified extends CarAuctionCore {
         var $dropdownList = $fuelFacet.find('.facet-dropdown-list');
         var $trigger = $fuelFacet.find('.custom-select-trigger');
 
+        var normalizedFuelTypes = [];
+        if (Array.isArray(fuelTypes)) {
+            fuelTypes.forEach((fuel) => {
+                if (!fuel) {
+                    return;
+                }
+
+                if (typeof fuel === 'string') {
+                    var value = fuel.trim();
+                    if (value !== '') {
+                        normalizedFuelTypes.push({
+                            code: value,
+                            name: value,
+                            count: null
+                        });
+                    }
+                    return;
+                }
+
+                if (typeof fuel === 'object') {
+                    var code = (fuel.code || fuel.value || '').toString().trim();
+                    var name = (fuel.name || fuel.label || code).toString().trim();
+                    if (code !== '' || name !== '') {
+                        normalizedFuelTypes.push({
+                            code: code || name,
+                            name: name || code,
+                            count: typeof fuel.count === 'number' ? fuel.count : null
+                        });
+                    }
+                }
+            });
+        }
+
         // Обновляем скрытый селект
         var html = '<option value="">Любое топливо</option>';
-        fuelTypes.forEach((fuel) => {
-            if (fuel && fuel.trim() !== '') {
-                html += '<option value="' + fuel + '">' + fuel + '</option>';
+        normalizedFuelTypes.forEach((fuel) => {
+            var label = fuel.name;
+            if (fuel.count !== null && fuel.count > 0) {
+                label += ' (' + fuel.count + ')';
             }
+            html += '<option value="' + fuel.code + '">' + label + '</option>';
         });
         $select.html(html);
 
         // Обновляем дропдаун список
         var dropdownHtml = '<div class="facet-dropdown-item selected" data-value="">Любое топливо</div>';
-        fuelTypes.forEach((fuel) => {
-            if (fuel && fuel.trim() !== '') {
-                dropdownHtml += '<div class="facet-dropdown-item" data-value="' + fuel + '">' + fuel + '</div>';
+        normalizedFuelTypes.forEach((fuel) => {
+            var label = fuel.name;
+            var disabled = fuel.count === 0 ? ' disabled' : '';
+            if (fuel.count !== null) {
+                label += ' (' + fuel.count + ')';
             }
+            dropdownHtml += '<div class="facet-dropdown-item' + disabled + '" data-value="' + fuel.code + '">' + label + '</div>';
         });
         $dropdownList.html(dropdownHtml);
 
         // Сбрасываем выбор на "Любое топливо"
         $trigger.text('Любое топливо');
 
-        console.log('CarSearchUnified: Updated fuel type filter with', fuelTypes.length, 'options');
+        console.log('CarSearchUnified: Updated fuel type filter with', normalizedFuelTypes.length, 'options');
     }
 
     // Обновление фильтра трансмиссии
@@ -2282,7 +2326,7 @@ class CarSearchUnified extends CarAuctionCore {
 
     // Скрытие фильтра типов топлива
     hideFuelTypeFilter() {
-        var $fuelFacet = $('.facetwp-facet-fuel_type');
+        var $fuelFacet = $('.facetwp-facet-fuel_type, .facetwp-facet-fuel, .facetwp-facet[data-name="fuel_type"], .facetwp-facet[data-name="fuel"]');
         if ($fuelFacet.length > 0) {
             $fuelFacet.hide();
             console.log('CarSearchUnified: Fuel type filter hidden (not supported for current market)');

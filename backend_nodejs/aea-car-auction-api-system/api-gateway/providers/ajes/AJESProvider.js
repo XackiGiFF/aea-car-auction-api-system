@@ -160,6 +160,10 @@ class AJESProvider extends BaseProvider {
         this.externalHost = 'http://87.242.72.57';
         this.externalCache = {};
         this.externalCacheTTL = 30 * 60 * 1000;
+        this.dynamicFiltersCacheTTL = (() => {
+            const parsed = Number.parseInt(process.env.AJES_DYNAMIC_FILTERS_CACHE_TTL_MS || '60000', 10);
+            return Number.isInteger(parsed) && parsed >= 0 ? parsed : 60000;
+        })();
         this.debugSql = process.env.AJES_DEBUG_SQL === 'true';
         this.defaultLimit = 20;
         this.maxLimit = (() => {
@@ -497,18 +501,34 @@ class AJESProvider extends BaseProvider {
     async getDynamicFilters(currentFilters = {}, table = 'main', clientIP) {
         try {
             const safeTable = this._getSafeTable(table);
-            // Получаем вендоры
-            const vendors = await this._fetchExternalManuf(safeTable, clientIP);
-            const vendorNames = vendors ? vendors.map(v => v.name).filter(Boolean) : [];
-
-            // Получаем модели
-            let models = [];
-            if (currentFilters.vendor) {
-                models = await this.getModelsByVendor(currentFilters.vendor, safeTable, clientIP);
+            const vendorFilter = currentFilters.vendor ? String(currentFilters.vendor).trim() : '';
+            const vendorCacheKey = vendorFilter.toUpperCase();
+            const cacheKey = vendorFilter
+                ? `dynamic_filters_${safeTable}_vendor_${vendorCacheKey}`
+                : `dynamic_filters_${safeTable}_all`;
+            const cached = this.externalCache[cacheKey];
+            if (this._isFresh(cached, this.dynamicFiltersCacheTTL)) {
+                return cached.data;
             }
 
-            // Получаем фильтры с группировкой
-            const fuelRaw = await this.getAvailableFuelTypes(safeTable, clientIP);
+            // Набор запросов не зависит друг от друга, поэтому выполняем параллельно.
+            const vendorsPromise = this._fetchExternalManuf(safeTable, clientIP);
+            const modelsPromise = vendorFilter
+                ? this.getModelsByVendor(vendorFilter, safeTable, clientIP)
+                : Promise.resolve([]);
+            const fuelPromise = this.getAvailableFuelTypes(safeTable, clientIP);
+            const transmissionsPromise = this.getAvailableTransmissions(safeTable, clientIP);
+            const drivesPromise = this.getAvailableDrives(safeTable, clientIP);
+
+            const [vendors, models, fuelRaw, transmissions, drives] = await Promise.all([
+                vendorsPromise,
+                modelsPromise,
+                fuelPromise,
+                transmissionsPromise,
+                drivesPromise
+            ]);
+
+            const vendorNames = vendors ? vendors.map(v => v.name).filter(Boolean) : [];
 
             const fuel_types = Object.entries(fuelRaw).map(([code, data]) => ({
                 code: code,
@@ -516,13 +536,10 @@ class AJESProvider extends BaseProvider {
                 count: data.count
             }));
 
-            const transmissions = await this.getAvailableTransmissions(safeTable, clientIP);
-            const drives = await this.getAvailableDrives(safeTable, clientIP);
-
             // Генерация диапазона годов
             const years = this._generateYearRange();
 
-            return {
+            const result = {
                 vendors: vendorNames,
                 models,
                 years,
@@ -530,6 +547,20 @@ class AJESProvider extends BaseProvider {
                 transmissions,
                 drives
             };
+
+            const hasFuelData = fuel_types.some((item) => Number(item?.count) > 0);
+            const hasTransmissionData = Object.values(transmissions || {}).some((item) => Number(item?.count) > 0);
+            const hasDriveData = Object.values(drives || {}).some((item) => Number(item?.count) > 0);
+            const canCache = vendorNames.length > 0 && (
+                safeTable === 'bike' || hasFuelData || hasTransmissionData || hasDriveData
+            );
+
+            // Не кешируем очевидно "битые" ответы (например, при блокировке IP у провайдера).
+            if (canCache) {
+                this.externalCache[cacheKey] = { data: result, updatedAt: Date.now() };
+            }
+
+            return result;
         } catch (error) {
             console.error('Error getting filters from AJES:', error.message);
             return {
@@ -579,7 +610,16 @@ class AJESProvider extends BaseProvider {
     async getModelsByVendor(vendorName, table, clientIP) {
         try {
             const safeTable = this._getSafeTable(table);
-            const escapedVendorName = this._escapeSqlLiteral(vendorName);
+            const normalizedVendorName = String(vendorName || '').trim();
+            if (!normalizedVendorName) return [];
+
+            const cacheKey = `models_${safeTable}_${normalizedVendorName.toUpperCase()}`;
+            const cached = this.externalCache[cacheKey];
+            if (this._isFresh(cached, this.externalCacheTTL)) {
+                return cached.data;
+            }
+
+            const escapedVendorName = this._escapeSqlLiteral(normalizedVendorName);
             const sql = `SELECT DISTINCT MODEL_NAME FROM ${safeTable}
                          WHERE MARKA_NAME = '${escapedVendorName}'
                            AND MODEL_NAME IS NOT NULL
@@ -589,12 +629,17 @@ class AJESProvider extends BaseProvider {
 
             if (Array.isArray(data)) {
                 // Преобразуем массив объектов в массив строк
-                return data.map(row => {
+                const models = data.map(row => {
                     // 1. Пробуем получить по точному ключу (чаще всего MODEL_NAME)
                     // 2. Пробуем в нижнем регистре
                     // 3. Если ключи неизвестны, берем первое значение объекта (Object.values)
                     return row.MODEL_NAME || row.model_name || Object.values(row)[0];
                 }).filter(val => val && typeof val === 'string' && val.trim() !== '');
+
+                if (models.length > 0) {
+                    this.externalCache[cacheKey] = { data: models, updatedAt: Date.now() };
+                }
+                return models;
             }
             return [];
         } catch (error) {
